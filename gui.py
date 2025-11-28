@@ -11,6 +11,7 @@ import numpy as np
 matplotlib.use("Agg")
 
 import re
+import subprocess
 
 from PyQt6.QtCore import QProcess, Qt, QTimer, QEvent
 from PyQt6.QtGui import QPixmap
@@ -65,6 +66,10 @@ class SimulationGUI(QWidget):
         self.pressure_torr = QLineEdit("")
         self.pressure_torr.setEnabled(False)
         self.override_pressure.toggled.connect(self._toggle_pressure_field)
+        self.enable_sweep_plot = QCheckBox("Generate sweep plot")
+        self.sweep_output = QLineEdit("eit_rf_sweep.png")
+        self.sweep_output.setEnabled(False)
+        self.enable_sweep_plot.toggled.connect(self._toggle_sweep_field)
         self.probe_label_text = ""
         self.control_label_text = ""
         self.auto_n = QCheckBox("Auto select n")
@@ -81,6 +86,9 @@ class SimulationGUI(QWidget):
         self.no_show = QCheckBox("Skip plot window")
         self.no_show.setChecked(True)
         self.fit_peaks = QCheckBox("Fit peaks")
+        self.fit_profile = QComboBox()
+        self.fit_profile.addItem("Gaussian", "gaussian")
+        self.fit_profile.addItem("Lorentzian", "lorentzian")
         self.auto_rotate = QCheckBox("Auto-rotate visualization")
         self.auto_rotate.setChecked(True)
         self.auto_rotate.stateChanged.connect(self._toggle_auto_rotate)
@@ -116,6 +124,12 @@ class SimulationGUI(QWidget):
         pressure_label.setMinimumWidth(140)
         pressure_layout.addWidget(pressure_label)
         pressure_layout.addWidget(self.pressure_torr)
+        sweep_layout = QHBoxLayout()
+        sweep_layout.addWidget(self.enable_sweep_plot)
+        sweep_label = QLabel("Sweep figure")
+        sweep_label.setMinimumWidth(140)
+        sweep_layout.addWidget(sweep_label)
+        sweep_layout.addWidget(self.sweep_output)
 
         misc_group = self._make_rows([
             ("Output figure", self.output_file),
@@ -126,9 +140,16 @@ class SimulationGUI(QWidget):
         toggles_layout.addWidget(self.timing)
         toggles_layout.addWidget(self.no_show)
         toggles_layout.addWidget(self.fit_peaks)
+        profile_layout = QHBoxLayout()
+        profile_layout.addWidget(QLabel("Fit profile"))
+        profile_layout.addWidget(self.fit_profile)
 
         self.extra_args = QLineEdit()
         self.extra_args.setPlaceholderText("Extra CLI args (e.g., --doppler-method uniform --doppler-width 3.0)")
+        self.cli_help_box = QTextEdit()
+        self.cli_help_box.setReadOnly(True)
+        self.cli_help_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.cli_help_box.setText("Loading CLI options...")
 
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
@@ -137,11 +158,15 @@ class SimulationGUI(QWidget):
         forms.addLayout(beam_form)
         forms.addLayout(state_layout)
         forms.addLayout(pressure_layout)
+        forms.addLayout(sweep_layout)
         forms.addLayout(misc_group)
         forms.addLayout(toggles_layout)
+        forms.addLayout(profile_layout)
         forms.addWidget(self.extra_args)
+        forms.addWidget(QLabel("All CLI options (from main.py --help)"))
+        forms.addWidget(self.cli_help_box, 1)
         forms.addSpacing(10)
-        forms.addWidget(self.run_button)
+        forms.addStretch()
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
@@ -149,6 +174,14 @@ class SimulationGUI(QWidget):
         self.preview_label = QLabel("Preview not available.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(600, 450)
+        self.generated_plots: list[str] = []
+        self.preview_index = 0
+        self.prev_plot_btn = QPushButton("◀ Back")
+        self.next_plot_btn = QPushButton("Next ▶")
+        self.prev_plot_btn.clicked.connect(self._show_previous_plot)
+        self.next_plot_btn.clicked.connect(self._show_next_plot)
+        self.prev_plot_btn.setEnabled(False)
+        self.next_plot_btn.setEnabled(False)
 
         self.visual_fig = Figure(figsize=(3, 3))
         self.visual_ax = self.visual_fig.add_subplot(111, projection="3d")
@@ -179,15 +212,32 @@ class SimulationGUI(QWidget):
         visual_column.addLayout(button_row)
         log_row.addLayout(visual_column, 1)
         log_layout.addLayout(log_row)
-        log_layout.addWidget(self.preview_label)
+        preview_container = QVBoxLayout()
+        preview_container.addWidget(self.preview_label)
+        log_layout.addLayout(preview_container)
 
-        wrapper = QHBoxLayout()
-        wrapper.addLayout(forms)
-        wrapper.addLayout(log_layout)
-        self.setLayout(wrapper)
+        self.preview_buttons_layout = QHBoxLayout()
+        self.preview_buttons_layout.addWidget(self.prev_plot_btn)
+        self.preview_buttons_layout.addWidget(self.next_plot_btn)
+
+        content_row = QHBoxLayout()
+        content_row.addLayout(forms, 1)
+        content_row.addLayout(log_layout, 1)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.addWidget(self.run_button)
+        bottom_row.addStretch()
+        bottom_row.addLayout(self.preview_buttons_layout)
+
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(content_row, 1)
+        main_layout.addLayout(bottom_row)
+        self.setLayout(main_layout)
         for widget in [self.cell_length, self.cell_cross,
                        self.probe_waist, self.control_waist]:
             widget.editingFinished.connect(self._update_visualization)
+        self._set_preview_paths([])
+        self.cli_help_box.setText(self._load_cli_help())
 
     def _make_rows(self, rows):
         layout = QVBoxLayout()
@@ -200,6 +250,24 @@ class SimulationGUI(QWidget):
                 row_layout.addWidget(row[idx + 1])
             layout.addLayout(row_layout)
         return layout
+
+    def _load_cli_help(self) -> str:
+        try:
+            result = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "main.py"), "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            help_text = result.stdout
+            text = help_text if help_text else "Failed to load --help output."
+            marker = "options:"
+            if marker in text:
+                text = text.split(marker, 1)[1]
+                text = text.lstrip("\n")
+            return text.strip("\n")
+        except Exception as exc:
+            return f"Failed to load CLI options: {exc}"
 
     # ------------------------------------------------------------------ helpers
     def _read_stdout(self) -> None:
@@ -273,6 +341,11 @@ class SimulationGUI(QWidget):
             cmd.append("--timing")
         if self.fit_peaks.isChecked():
             cmd.append("--fit-peaks")
+            cmd.extend(["--fit-profile", self.fit_profile.currentData()])
+        if self.enable_sweep_plot.isChecked():
+            cmd.append("--sweep-plot")
+            if self.sweep_output.text().strip():
+                cmd.extend(["--sweep-output", self.sweep_output.text().strip()])
         extra = self.extra_args.text().strip()
         if extra:
             cmd.extend(extra.split())
@@ -302,18 +375,19 @@ class SimulationGUI(QWidget):
                      control_label=self.control_label_text)
         self._reset_visual_view()
         if self.auto_rotate.isChecked():
-            self.visual_timer.start(100)
+            self.visual_timer.start()
 
     def _reset_visual_view(self) -> None:
         self.visual_ax.view_init(elev=0, azim=70,roll=70)
         self.visual_ax.set_proj_type('persp')
         self.visual_ax.dist = 10
         self.visual_canvas.draw_idle()
-        if self.auto_rotate.isChecked():
-            self.visual_timer.start(100)
-        else:
-            self.visual_timer.start(100)
-            self.auto_rotate.toggle()
+        #if self.auto_rotate.isChecked():
+            #self.visual_timer.start(100)
+            #self.auto_rotate.toggle()
+        #else:
+            #self.visual_timer.start(100)
+            #self.auto_rotate.toggle()
 
     def _toggle_n_fields(self, checked: bool) -> None:
         self.n_value.setEnabled(not checked)
@@ -322,16 +396,26 @@ class SimulationGUI(QWidget):
     def _toggle_pressure_field(self, checked: bool) -> None:
         self.pressure_torr.setEnabled(checked)
 
-    def _update_preview(self) -> None:
-        path = self.output_file.text().strip()
-        if not path:
-            self.preview_label.setText("No output file specified.")
+    def _toggle_sweep_field(self, checked: bool) -> None:
+        self.sweep_output.setEnabled(checked)
+
+    def _set_preview_paths(self, paths: list[str]) -> None:
+        self.generated_plots = paths
+        self.preview_index = 0
+        self._refresh_preview_label()
+
+    def _refresh_preview_label(self) -> None:
+        total = len(self.generated_plots)
+        self.prev_plot_btn.setEnabled(total > 1 and self.preview_index > 0)
+        self.next_plot_btn.setEnabled(total > 1 and self.preview_index < total - 1)
+        if total == 0:
+            self.preview_label.setText("No plot images available.")
             return
-        full_path = (REPO_ROOT / path).resolve()
-        if not full_path.exists():
-            self.preview_label.setText(f"No file at {full_path}.")
+        path = Path(self.generated_plots[self.preview_index])
+        if not path.exists():
+            self.preview_label.setText(f"No file at {path}.")
             return
-        pixmap = QPixmap(str(full_path))
+        pixmap = QPixmap(str(path))
         if pixmap.isNull():
             self.preview_label.setText("Failed to load image.")
         else:
@@ -340,6 +424,31 @@ class SimulationGUI(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             ))
+
+    def _update_preview(self) -> None:
+        paths: list[str] = []
+        main_path = self.output_file.text().strip()
+        if main_path:
+            full = (REPO_ROOT / main_path).resolve()
+            if full.exists():
+                paths.append(str(full))
+        if self.enable_sweep_plot.isChecked():
+            sweep_path = self.sweep_output.text().strip()
+            if sweep_path:
+                full = (REPO_ROOT / sweep_path).resolve()
+                if full.exists():
+                    paths.append(str(full))
+        self._set_preview_paths(paths)
+
+    def _show_previous_plot(self) -> None:
+        if self.preview_index > 0:
+            self.preview_index -= 1
+            self._refresh_preview_label()
+
+    def _show_next_plot(self) -> None:
+        if self.preview_index + 1 < len(self.generated_plots):
+            self.preview_index += 1
+            self._refresh_preview_label()
 
     def _parse_wavelengths(self, text: str) -> None:
         probe_match = re.search(r"Probe transition:.*?~([\d\.]+)\s+nm", text)
@@ -359,7 +468,7 @@ class SimulationGUI(QWidget):
     def _spin_visualization(self) -> None:
         self.rotation_angle = (self.rotation_angle + self.rotation_speed) % 360
         azim = (self.rotation_angle) % 360
-        elev = 100 * np.sin(np.radians(self.rotation_angle / 2))
+        elev = 100 * np.sin(np.radians(self.rotation_angle / 2)) % 360
         self.visual_ax.view_init(elev=elev, azim=azim, roll=70)
         self.visual_canvas.draw_idle()
 
@@ -375,7 +484,7 @@ class SimulationGUI(QWidget):
 
     def _toggle_auto_rotate(self, state):
         if state == Qt.CheckState.Checked.value:
-            self.visual_timer.start(100)
+            self.visual_timer.start()
         else:
             self.visual_timer.stop()
 

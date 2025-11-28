@@ -102,9 +102,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rf-frequency", type=float, required=True,
                         help="Applied RF frequency in MHz that couples the Rydberg states.")
     parser.add_argument("--rf-amplitudes", type=float, nargs="+",
-                        default=[0.0, 0.01, 0.02, 0.05],
+                        default=[0.0, 0.01, 0.02, 0.05, 0.085, 0.1],
                         help="List of RF electric-field amplitudes in V/cm to sweep.")
-    parser.add_argument("--probe-power", type=float, default=1e-4,
+    parser.add_argument("--probe-power", type=float, default=5e-5,
                         help="Probe laser power in watts.")
     parser.add_argument("--control-power", type=float, default=10e-3,
                         help="Control laser power in watts.")
@@ -158,6 +158,14 @@ def parse_args() -> argparse.Namespace:
                         help="Print timing information for the overall simulation.")
     parser.add_argument("--fit-peaks", action="store_true",
                         help="Fit the transmission curve to extract Δ_peak even when peaks overlap.")
+    parser.add_argument("--fit-profile", choices=("gaussian", "lorentzian"), default="gaussian",
+                        help="Line shape to use when fitting peaks.")
+    parser.add_argument("--sweep-plot", action="store_true",
+                        help="Generate an additional Δ_fit vs RF amplitude plot by sweeping many amplitudes.")
+    parser.add_argument("--sweep-points", type=int, default=20,
+                        help="Number of RF amplitudes to sample for the sweep plot.")
+    parser.add_argument("--sweep-output", default="eit_rf_sweep.png",
+                        help="Filename for the sweep plot.")
     return parser.parse_args()
 
 
@@ -409,10 +417,17 @@ def peak_spacing(detunings_mhz: np.ndarray, transmission: np.ndarray) -> float:
     return abs(detunings_mhz[pos_idx] - detunings_mhz[neg_idx])
 
 
-def _double_gaussian(det, center, splitting, sigma, amp1, amp2, offset):
+def _double_gaussian(det, center, splitting, width, amp1, amp2, offset):
     half = splitting / 2.0
-    term1 = amp1 * np.exp(-0.5 * ((det - (center - half)) / sigma) ** 2)
-    term2 = amp2 * np.exp(-0.5 * ((det - (center + half)) / sigma) ** 2)
+    term1 = amp1 * np.exp(-0.5 * ((det - (center - half)) / width) ** 2)
+    term2 = amp2 * np.exp(-0.5 * ((det - (center + half)) / width) ** 2)
+    return term1 + term2 + offset
+
+
+def _double_lorentzian(det, center, splitting, width, amp1, amp2, offset):
+    half = splitting / 2.0
+    term1 = amp1 / (1.0 + ((det - (center - half)) / width) ** 2)
+    term2 = amp2 / (1.0 + ((det - (center + half)) / width) ** 2)
     return term1 + term2 + offset
 
 
@@ -420,18 +435,26 @@ def _gaussian(det, center, sigma, amplitude):
     return amplitude * np.exp(-0.5 * ((det - center) / sigma) ** 2)
 
 
+def _lorentzian(det, center, gamma, amplitude):
+    return amplitude / (1.0 + ((det - center) / gamma) ** 2)
+
+
 def fit_peak_spacing(detunings_mhz: np.ndarray,
                      transmission: np.ndarray,
-                     guess_split: float | None):
+                     guess_split: float | None,
+                     baseline: np.ndarray | None = None,
+                     profile: str = "gaussian"):
     if detunings_mhz.size < 5:
         return np.nan, None
 
     if guess_split is None or np.isnan(guess_split) or guess_split <= 0:
         guess_split = max(1.0, 0.1 * (detunings_mhz.max() - detunings_mhz.min()))
 
+    fit_data = transmission if baseline is None else transmission - baseline
+
     sigma_guess = max(0.5, guess_split / 4.0)
-    amp_guess = max(1e-3, transmission.max() - transmission.min())
-    offset_guess = transmission.min()
+    amp_guess = max(1e-3, fit_data.max() - fit_data.min())
+    offset_guess = fit_data.min()
 
     p0 = [0.0, guess_split, sigma_guess, amp_guess, amp_guess * 0.8, offset_guess]
     bounds = (
@@ -440,10 +463,11 @@ def fit_peak_spacing(detunings_mhz: np.ndarray,
     )
 
     try:
+        profile_func = _double_gaussian if profile == "gaussian" else _double_lorentzian
         popt, _ = curve_fit(
-            _double_gaussian,
+            profile_func,
             detunings_mhz,
-            transmission,
+            fit_data,
             p0=p0,
             bounds=bounds,
             maxfev=10000,
@@ -628,31 +652,38 @@ def main() -> None:
     rf_rabi_mrads = np.array([res[2] for res in results])
 
     baseline_transmission = None
-    if len(raw_transmissions) > 0:
+    baseline_needed = args.normalize_baseline or args.baseline_rf_amplitude is not None or args.fit_peaks
+    if baseline_needed and len(raw_transmissions) > 0:
         if args.baseline_rf_amplitude is not None:
-            vprint(args.verbose,
-                   f"Computing baseline using RF amplitude {args.baseline_rf_amplitude:.4f} V/cm.")
-            baseline_transmission, _, _ = simulate_transparency(
-                args,
-                states,
-                probe_rabi_mrad,
-                control_rabi_mrad,
-                args.baseline_rf_amplitude,
-                probe_detuning_mhz,
-                probe_detuning_mrad,
-                rf_detuning_mrad,
-                probe_kunit,
-                control_kunit,
-                doppler_enabled,
-                doppler_kwargs,
-            )
-            baseline_transmission = baseline_transmission.copy()
-        elif len(raw_transmissions) > 0:
-            baseline_transmission = raw_transmissions[-1].copy()
+            baseline_amp = args.baseline_rf_amplitude
+        else:
+            max_amp = max(args.rf_amplitudes) if args.rf_amplitudes else 0.0
+            baseline_amp = 100.0 * max_amp
+        vprint(args.verbose,
+               f"Computing baseline using RF amplitude {baseline_amp:.4f} V/cm.")
+        baseline_transmission, _, _ = simulate_transparency(
+            args,
+            states,
+            probe_rabi_mrad,
+            control_rabi_mrad,
+            baseline_amp,
+            probe_detuning_mhz,
+            probe_detuning_mrad,
+            rf_detuning_mrad,
+            probe_kunit,
+            control_kunit,
+            doppler_enabled,
+            doppler_kwargs,
+        )
+        baseline_transmission = baseline_transmission.copy()
 
     fit_curves = raw_transmissions.copy()
-    if baseline_transmission is not None:
+    if args.normalize_baseline and baseline_transmission is not None:
         fit_curves = fit_curves - baseline_transmission
+
+    fit_baseline_curve = None
+    if baseline_transmission is not None and not args.normalize_baseline:
+        fit_baseline_curve = baseline_transmission
 
     if args.normalize_baseline:
         transmissions = fit_curves.copy()
@@ -689,20 +720,29 @@ def main() -> None:
             guess_for_fit = measured_spacing if not np.isnan(measured_spacing) else expected_split_mhz
             if guess_for_fit is None or np.isnan(guess_for_fit) or guess_for_fit <= 0:
                 guess_for_fit = df_value
-            fit_spacing, fit_params = fit_peak_spacing(probe_detuning_mhz, fitting_curve, guess_for_fit)
+            baseline_for_fit = None if args.normalize_baseline else fit_baseline_curve
+            fit_spacing, fit_params = fit_peak_spacing(
+                probe_detuning_mhz,
+                fitting_curve,
+                guess_for_fit,
+                baseline=baseline_for_fit,
+                profile=args.fit_profile,
+            )
             fit_text = ", Δ_fit=NA" if np.isnan(fit_spacing) else f", Δ_fit={fit_spacing:.2f} MHz"
 
         label = (f"E_RF={rf_field*1e3:.1f} mV/cm, "
                  f"{expected_text}, {spacing_text}{fit_text}")
         ax.plot(probe_detuning_mhz, transmission, label=label)
 
-        if args.fit_peaks and args.normalize_baseline and fit_params is not None:
-            center, splitting, sigma, amp1, amp2, offset = fit_params
+        if args.fit_peaks and fit_params is not None:
+            center, splitting, width_param, amp1, amp2, offset = fit_params
             half = splitting / 2.0
-            gauss1 = _gaussian(probe_detuning_mhz, center - half, sigma, amp1)
-            gauss2 = _gaussian(probe_detuning_mhz, center + half, sigma, amp2)
-            ax.plot(probe_detuning_mhz, gauss1 + offset / 2.0, "--", color="black", linewidth=1, alpha=0.7)
-            ax.plot(probe_detuning_mhz, gauss2 + offset / 2.0, "--", color="black", linewidth=1, alpha=0.7)
+            profile_component = _gaussian if args.fit_profile == "gaussian" else _lorentzian
+            comp1 = profile_component(probe_detuning_mhz, center - half, width_param, amp1)
+            comp2 = profile_component(probe_detuning_mhz, center + half, width_param, amp2)
+            baseline_plot = fit_baseline_curve if fit_baseline_curve is not None else 0.0
+            total_fit = comp1 + comp2 + offset + baseline_plot
+            ax.plot(probe_detuning_mhz, total_fit, "--", color="black", linewidth=1, alpha=0.7)
 
     ax.set_xlabel("Probe detuning (MHz)")
     ax.set_ylabel("Transmission")
@@ -715,6 +755,65 @@ def main() -> None:
     fig.tight_layout()
     fig.savefig(args.output, dpi=300)
     print(f"Saved Autler-Townes plot to {args.output}")
+
+    if args.sweep_plot:
+        rf_min = min(args.rf_amplitudes)
+        rf_max = max(args.rf_amplitudes)
+        if np.isclose(rf_min, rf_max):
+            print("Sweep plot skipped: RF amplitudes span zero range.")
+        else:
+            sweep_fields = np.linspace(rf_min, rf_max, max(2, args.sweep_points))
+            sweep_splittings = []
+            df_splittings = []
+            print(f"Running sweep plot over {len(sweep_fields)} RF amplitudes...")
+            for rf_field in sweep_fields:
+                transmission, rf_rabi_mhz, _ = simulate_transparency(
+                    args,
+                    states,
+                    probe_rabi_mrad,
+                    control_rabi_mrad,
+                    rf_field,
+                    probe_detuning_mhz,
+                    probe_detuning_mrad,
+                    rf_detuning_mrad,
+                    probe_kunit,
+                    control_kunit,
+                    doppler_enabled,
+                    doppler_kwargs,
+                )
+                sweep_curve = transmission.copy()
+                if args.normalize_baseline and baseline_transmission is not None:
+                    sweep_curve = sweep_curve - baseline_transmission
+                measured_spacing = peak_spacing(probe_detuning_mhz, sweep_curve)
+                df_value = (freq_info["control_lambda_nm"] / freq_info["probe_lambda_nm"]) * rf_rabi_mhz
+                df_splittings.append(df_value)
+                guess_for_fit = measured_spacing if not np.isnan(measured_spacing) else df_value
+                if guess_for_fit is None or np.isnan(guess_for_fit) or guess_for_fit <= 0:
+                    guess_for_fit = (freq_info["control_lambda_nm"] / freq_info["probe_lambda_nm"]) * rf_rabi_mhz
+                baseline_for_fit = None if args.normalize_baseline else fit_baseline_curve
+                fit_spacing, _ = fit_peak_spacing(
+                    probe_detuning_mhz,
+                    sweep_curve,
+                    guess_for_fit,
+                    baseline=baseline_for_fit,
+                    profile=args.fit_profile,
+                )
+                if np.isnan(fit_spacing):
+                    fit_spacing = measured_spacing
+                if np.isnan(fit_spacing):
+                    fit_spacing = np.nan
+                sweep_splittings.append(fit_spacing)
+            fig_sweep, ax_sweep = plt.subplots(figsize=(7, 4))
+            ax_sweep.plot(sweep_fields, sweep_splittings, "o-", label="Δ_fit")
+            ax_sweep.plot(sweep_fields, df_splittings, "--", label="Ω_RF * λ_c/λ_p expectation")
+            ax_sweep.set_xlabel("RF amplitude (V/cm)")
+            ax_sweep.set_ylabel("Splitting (MHz)")
+            ax_sweep.set_title(f"Δ_fit vs RF amplitude (n={selected_n})")
+            ax_sweep.grid(True)
+            ax_sweep.legend()
+            fig_sweep.tight_layout()
+            fig_sweep.savefig(args.sweep_output, dpi=300)
+            print(f"Saved sweep plot to {args.sweep_output}")
 
     if args.timing and t_start is not None:
         elapsed = time.perf_counter() - t_start
