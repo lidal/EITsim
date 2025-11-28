@@ -13,7 +13,9 @@ Features
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Tuple
 
 import matplotlib
@@ -41,6 +43,7 @@ RB_MASSES = {
     "Rb87": 86.909180531 * MASSU,
 }
 ARC_DATA_LOCK = Lock()
+BACKEND_MODE = False
 
 
 @dataclass(frozen=True)
@@ -59,9 +62,25 @@ class SimulationStates:
         }
 
 
-def vprint(enabled: bool, message: str) -> None:
-    if enabled:
+def cprint(message: str) -> None:
+    if not BACKEND_MODE:
         print(message)
+
+
+def vprint(enabled: bool, message: str) -> None:
+    if enabled and not BACKEND_MODE:
+        print(message)
+
+
+def f_or_none(value):
+    if value is None:
+        return None
+    try:
+        if np.isnan(value):
+            return None
+    except TypeError:
+        pass
+    return float(value)
 
 
 def apply_pressure_override(cell: Cell, args: argparse.Namespace) -> float:
@@ -166,6 +185,8 @@ def parse_args() -> argparse.Namespace:
                         help="Number of RF amplitudes to sample for the sweep plot.")
     parser.add_argument("--sweep-output", default="eit_rf_sweep.png",
                         help="Filename for the sweep plot.")
+    parser.add_argument("--backend-json", type=str, default=None,
+                        help="Write structured output to this JSON file and suppress console chatter.")
     return parser.parse_args()
 
 
@@ -267,10 +288,10 @@ def auto_select_n(atom,
 
     _, n_selected, np_selected, states, rf_res_hz = best
     detuning_mhz = (target_hz - rf_res_hz) / 1e6
-    print(f"Auto-selected n={n_selected}, n_p={np_selected} (offset {np_selected - n_selected}) "
-          f"with RF resonance {rf_res_hz / 1e9:.3f} GHz (detuning {detuning_mhz:+.3f} MHz).")
+    cprint(f"Auto-selected n={n_selected}, n_p={np_selected} (offset {np_selected - n_selected}) "
+           f"with RF resonance {rf_res_hz / 1e9:.3f} GHz (detuning {detuning_mhz:+.3f} MHz).")
     if n_selected in (n_min, n_max):
-        print("Warning: best match hits the n search boundary; consider expanding --n-min/--n-max.")
+        cprint("Warning: best match hits the n search boundary; consider expanding --n-min/--n-max.")
     return n_selected, np_selected, states, rf_res_hz
 
 
@@ -308,7 +329,8 @@ def add_couplings(cell: Cell,
     cell.probe_tuple = (states.ground, states.intermediate)
 
 
-def report_transition_frequencies(atom, states: SimulationStates, rf_frequency_input_mhz: float) -> Dict[str, float]:
+def report_transition_frequencies(atom, states: SimulationStates, rf_frequency_input_mhz: float,
+                                  quiet: bool = False) -> Dict[str, float]:
     """Compute and display the relevant transition frequencies."""
     probe_freq_hz = atom.get_transition_frequency(states.ground, states.intermediate)
     control_freq_hz = atom.get_transition_frequency(states.intermediate, states.rydberg_d)
@@ -319,12 +341,13 @@ def report_transition_frequencies(atom, states: SimulationStates, rf_frequency_i
 
     rf_detuning_hz = rf_frequency_input_mhz * 1e6 - rf_res_hz
 
-    print(f"Probe transition:   {probe_freq_hz / 1e12:.6f} THz  (~{probe_lambda_nm:.2f} nm)")
-    print(f"Coupling transition:{control_freq_hz / 1e12:.6f} THz  (~{control_lambda_nm:.2f} nm)")
-    print(f"RF transition:      {rf_res_hz / 1e9:.3f} GHz")
-    print(f"RF detuning:        {rf_detuning_hz / 1e6:+.3f} MHz from resonance")
-    print(f"Recommended coupling laser frequency for n={states.rydberg_d.n}: "
-          f"{control_freq_hz / 1e12:.6f} THz")
+    if not quiet:
+        cprint(f"Probe transition:   {probe_freq_hz / 1e12:.6f} THz  (~{probe_lambda_nm:.2f} nm)")
+        cprint(f"Coupling transition:{control_freq_hz / 1e12:.6f} THz  (~{control_lambda_nm:.2f} nm)")
+        cprint(f"RF transition:      {rf_res_hz / 1e9:.3f} GHz")
+        cprint(f"RF detuning:        {rf_detuning_hz / 1e6:+.3f} MHz from resonance")
+        cprint(f"Recommended coupling laser frequency for n={states.rydberg_d.n}: "
+               f"{control_freq_hz / 1e12:.6f} THz")
     return {
         "probe_freq_hz": probe_freq_hz,
         "control_freq_hz": control_freq_hz,
@@ -546,6 +569,8 @@ def analytic_autler_townes(control_rabi_mhz: float,
 
 def main() -> None:
     args = parse_args()
+    global BACKEND_MODE
+    BACKEND_MODE = bool(args.backend_json)
     t_start = time.perf_counter() if args.timing else None
     states = build_states(args.isotope, args.n, args.np)
     selected_n = args.n
@@ -593,7 +618,7 @@ def main() -> None:
     else:
         selected_np = args.np if args.np is not None else args.n + 1
 
-    freq_info = report_transition_frequencies(atom, states, args.rf_frequency)
+    freq_info = report_transition_frequencies(atom, states, args.rf_frequency, quiet=BACKEND_MODE)
     gas_density = analysis_cell.density
     temp_for_pressure = max(args.temperature, 1e-6)
     gas_pressure_pa = gas_density * k * temp_for_pressure
@@ -652,6 +677,7 @@ def main() -> None:
     rf_rabi_mrads = np.array([res[2] for res in results])
 
     baseline_transmission = None
+    baseline_amp_used = None
     baseline_needed = args.normalize_baseline or args.baseline_rf_amplitude is not None or args.fit_peaks
     if baseline_needed and len(raw_transmissions) > 0:
         if args.baseline_rf_amplitude is not None:
@@ -661,6 +687,7 @@ def main() -> None:
             baseline_amp = 100.0 * max_amp
         vprint(args.verbose,
                f"Computing baseline using RF amplitude {baseline_amp:.4f} V/cm.")
+        baseline_amp_used = baseline_amp
         baseline_transmission, _, _ = simulate_transparency(
             args,
             states,
@@ -694,6 +721,7 @@ def main() -> None:
         transmissions = raw_transmissions.copy()
 
     fig, ax = plt.subplots(figsize=(8, 5))
+    amplitude_results = []
     for idx, rf_field in enumerate(args.rf_amplitudes):
         transmission = transmissions[idx]
         fitting_curve = fit_curves[idx]
@@ -716,6 +744,7 @@ def main() -> None:
             expected_text = f"Δ_AT={expected_split_mhz:.2f} MHz (Df={df_value:.2f} MHz)"
         fit_text = ""
         fit_params = None
+        fit_spacing_value = np.nan
         if args.fit_peaks:
             guess_for_fit = measured_spacing if not np.isnan(measured_spacing) else expected_split_mhz
             if guess_for_fit is None or np.isnan(guess_for_fit) or guess_for_fit <= 0:
@@ -728,6 +757,7 @@ def main() -> None:
                 baseline=baseline_for_fit,
                 profile=args.fit_profile,
             )
+            fit_spacing_value = fit_spacing
             fit_text = ", Δ_fit=NA" if np.isnan(fit_spacing) else f", Δ_fit={fit_spacing:.2f} MHz"
 
         label = (f"E_RF={rf_field*1e3:.1f} mV/cm, "
@@ -743,6 +773,14 @@ def main() -> None:
             baseline_plot = fit_baseline_curve if fit_baseline_curve is not None else 0.0
             total_fit = comp1 + comp2 + offset + baseline_plot
             ax.plot(probe_detuning_mhz, total_fit, "--", color="black", linewidth=1, alpha=0.7)
+        amplitude_results.append({
+            "rf_field_v_cm": float(rf_field),
+            "rf_rabi_mhz": float(rf_rabi_mhz),
+            "df_mhz": float(df_value),
+            "expected_split_mhz": f_or_none(expected_split_mhz),
+            "delta_peak_mhz": f_or_none(measured_spacing),
+            "delta_fit_mhz": f_or_none(fit_spacing_value),
+        })
 
     ax.set_xlabel("Probe detuning (MHz)")
     ax.set_ylabel("Transmission")
@@ -754,18 +792,19 @@ def main() -> None:
     ax.legend()
     fig.tight_layout()
     fig.savefig(args.output, dpi=300)
-    print(f"Saved Autler-Townes plot to {args.output}")
+    cprint(f"Saved Autler-Townes plot to {args.output}")
 
+    sweep_payload = None
     if args.sweep_plot:
         rf_min = min(args.rf_amplitudes)
         rf_max = max(args.rf_amplitudes)
         if np.isclose(rf_min, rf_max):
-            print("Sweep plot skipped: RF amplitudes span zero range.")
+            cprint("Sweep plot skipped: RF amplitudes span zero range.")
         else:
             sweep_fields = np.linspace(rf_min, rf_max, max(2, args.sweep_points))
             sweep_splittings = []
             df_splittings = []
-            print(f"Running sweep plot over {len(sweep_fields)} RF amplitudes...")
+            cprint(f"Running sweep plot over {len(sweep_fields)} RF amplitudes...")
             for rf_field in sweep_fields:
                 transmission, rf_rabi_mhz, _ = simulate_transparency(
                     args,
@@ -813,20 +852,54 @@ def main() -> None:
             ax_sweep.legend()
             fig_sweep.tight_layout()
             fig_sweep.savefig(args.sweep_output, dpi=300)
-            print(f"Saved sweep plot to {args.sweep_output}")
+            cprint(f"Saved sweep plot to {args.sweep_output}")
+            sweep_payload = {
+                "fields_v_cm": [float(val) for val in sweep_fields],
+                "delta_fit_mhz": [f_or_none(val) for val in sweep_splittings],
+                "df_mhz": [f_or_none(val) for val in df_splittings],
+                "plot": str(Path(args.sweep_output).resolve()),
+            }
 
     if args.timing and t_start is not None:
         elapsed = time.perf_counter() - t_start
-        print(f"Simulation completed in {elapsed:.2f} s.")
+        cprint(f"Simulation completed in {elapsed:.2f} s.")
 
     if not args.no_show:
         backend = plt.get_backend().lower()
         non_interactive_backends = {"agg", "pdf", "ps", "svg", "cairo", "template"}
         if backend in non_interactive_backends:
-            print(f"Matplotlib backend '{backend}' is non-interactive; skipping GUI display.")
-            print("Re-run with an interactive backend or pass --no-show (already implied here).")
+            cprint(f"Matplotlib backend '{backend}' is non-interactive; skipping GUI display.")
+            cprint("Re-run with an interactive backend or pass --no-show (already implied here).")
         else:
             plt.show()
+
+    if args.backend_json:
+        plots_dict = {"transmission": str(Path(args.output).resolve())}
+        if sweep_payload:
+            plots_dict["sweep"] = sweep_payload["plot"]
+        backend_payload = {
+            "selected_n": selected_n,
+            "selected_np": selected_np,
+            "probe_freq_hz": freq_info["probe_freq_hz"],
+            "control_freq_hz": freq_info["control_freq_hz"],
+            "probe_lambda_nm": freq_info["probe_lambda_nm"],
+            "control_lambda_nm": freq_info["control_lambda_nm"],
+            "rf_res_hz": freq_info["rf_res_hz"],
+            "rf_detuning_mhz": float(rf_detuning_mhz),
+            "temperature_K": args.temperature,
+            "pressure_override_torr": args.pressure_torr,
+            "gas_density_m3": gas_density,
+            "gas_pressure_torr": gas_pressure_torr,
+            "baseline_amplitude_v_cm": baseline_amp_used,
+            "amplitudes": amplitude_results,
+            "plots": plots_dict,
+            "sweep": sweep_payload,
+        }
+        try:
+            with open(args.backend_json, "w", encoding="utf-8") as backend_file:
+                json.dump(backend_payload, backend_file, indent=2)
+        except Exception as exc:
+            cprint(f"Failed to write backend JSON: {exc}")
 
 if __name__ == "__main__":
     main()

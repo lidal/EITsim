@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import json
+import tempfile
 from pathlib import Path
 
 
@@ -19,6 +21,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -28,6 +31,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QSizePolicy,
     QVBoxLayout,
+    QGroupBox,
     QWidget,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -93,6 +97,9 @@ class SimulationGUI(QWidget):
         self.auto_rotate.setChecked(True)
         self.auto_rotate.stateChanged.connect(self._toggle_auto_rotate)
 
+        self.output = QTextEdit()
+        self.output.setReadOnly(True)
+
         forms = QVBoxLayout()
 
         rf_group = self._make_rows([
@@ -150,6 +157,16 @@ class SimulationGUI(QWidget):
         self.cli_help_box.setReadOnly(True)
         self.cli_help_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.cli_help_box.setText("Loading CLI options...")
+        self.summary_box = QGroupBox("Simulation summary")
+        self.summary_box.setMinimumWidth(300)
+        summary_layout = QFormLayout()
+        self.summary_fields = {}
+        for key in ("Selected n", "Selected n_p", "Probe transition", "Coupling transition",
+                    "RF transition", "RF detuning"):
+            label = QLabel("—")
+            summary_layout.addRow(key + ":", label)
+            self.summary_fields[key] = label
+        self.summary_box.setLayout(summary_layout)
 
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
@@ -165,11 +182,10 @@ class SimulationGUI(QWidget):
         forms.addWidget(self.extra_args)
         forms.addWidget(QLabel("All CLI options (from main.py --help)"))
         forms.addWidget(self.cli_help_box, 1)
+        forms.addWidget(QLabel("Simulation log"))
+        self.output.setFixedHeight(120)
+        forms.addWidget(self.output)
         forms.addSpacing(10)
-        forms.addStretch()
-
-        self.output = QTextEdit()
-        self.output.setReadOnly(True)
 
         self.preview_label = QLabel("Preview not available.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -183,7 +199,7 @@ class SimulationGUI(QWidget):
         self.prev_plot_btn.setEnabled(False)
         self.next_plot_btn.setEnabled(False)
 
-        self.visual_fig = Figure(figsize=(3, 3))
+        self.visual_fig = Figure(figsize=(4, 4))
         self.visual_ax = self.visual_fig.add_subplot(111, projection="3d")
         self.visual_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self.visual_canvas = FigureCanvas(self.visual_fig)
@@ -199,11 +215,13 @@ class SimulationGUI(QWidget):
         self.reset_view_btn = QPushButton("Reset View")
         self.reset_view_btn.clicked.connect(self._reset_visual_view)
         self._update_visualization()
+        self.backend_json_path: str | None = None
+        self.backend_data = None
 
         log_layout = QVBoxLayout()
         log_row = QHBoxLayout()
         log_row.setSpacing(10)
-        log_row.addWidget(self.output, 1)
+        log_row.addWidget(self.summary_box)
         visual_column = QVBoxLayout()
         visual_column.addWidget(self.visual_canvas)
         button_row = QHBoxLayout()
@@ -251,6 +269,91 @@ class SimulationGUI(QWidget):
             layout.addLayout(row_layout)
         return layout
 
+    def _cleanup_backend_file(self):
+        if self.backend_json_path:
+            try:
+                Path(self.backend_json_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            self.backend_json_path = None
+
+    def _load_backend_results(self) -> bool:
+        path = self.backend_json_path
+        if not path:
+            return False
+        self.backend_json_path = None
+        backend_path = Path(path)
+        if not backend_path.exists():
+            self.output.append(f"<b>Backend JSON not found:</b> {backend_path}")
+            return False
+        try:
+            with backend_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            self.output.append(f"<b>Failed to parse backend JSON:</b> {exc}")
+            try:
+                backend_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False
+        try:
+            backend_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        self.backend_data = data
+        self._apply_backend_results(data)
+        return True
+
+    def _apply_backend_results(self, data: dict) -> None:
+        probe_lambda = data.get("probe_lambda_nm")
+        control_lambda = data.get("control_lambda_nm")
+        if isinstance(probe_lambda, (int, float)):
+            self.probe_label_text = f"λ ≈ {probe_lambda:.2f} nm"
+        if isinstance(control_lambda, (int, float)):
+            self.control_label_text = f"λ ≈ {control_lambda:.2f} nm"
+        plots = data.get("plots", {})
+        plot_paths = []
+        for key in ("transmission", "sweep"):
+            path = plots.get(key)
+            if path:
+                plot_paths.append(path)
+        if plot_paths:
+            self._set_preview_paths(plot_paths)
+        else:
+            self._set_preview_paths([])
+        self._update_summary_fields(data)
+
+    def _update_summary_fields(self, data: dict) -> None:
+        entries = {
+            "Selected n": data.get("selected_n"),
+            "Selected n_p": data.get("selected_np"),
+        }
+        probe_freq = data.get("probe_freq_hz")
+        if probe_freq:
+            probe_lambda = data.get("probe_lambda_nm")
+            entries["Probe transition"] = f"{probe_freq/1e12:.6f} THz (~{probe_lambda:.2f} nm)" if probe_lambda else f"{probe_freq/1e12:.6f} THz"
+        else:
+            entries["Probe transition"] = None
+        control_freq = data.get("control_freq_hz")
+        if control_freq:
+            control_lambda = data.get("control_lambda_nm")
+            entries["Coupling transition"] = f"{control_freq/1e12:.6f} THz (~{control_lambda:.2f} nm)" if control_lambda else f"{control_freq/1e12:.6f} THz"
+        else:
+            entries["Coupling transition"] = None
+        rf_res = data.get("rf_res_hz")
+        if rf_res:
+            entries["RF transition"] = f"{rf_res/1e9:.3f} GHz"
+        else:
+            entries["RF transition"] = None
+        rf_det = data.get("rf_detuning_mhz")
+        if rf_det is not None:
+            entries["RF detuning"] = f"{rf_det:+.3f} MHz"
+        else:
+            entries["RF detuning"] = None
+
+        for key, label in self.summary_fields.items():
+            value = entries.get(key)
+            label.setText(str(value) if value is not None else "—")
     def _load_cli_help(self) -> str:
         try:
             result = subprocess.run(
@@ -284,10 +387,13 @@ class SimulationGUI(QWidget):
         code = self.process.exitCode()
         if code == 0:
             self.output.append("<b>Simulation finished successfully.</b>")
-            self._update_preview()
+            loaded = self._load_backend_results()
+            if not loaded:
+                self._update_preview()
             self._update_visualization()
         else:
             self.output.append(f"<b style='color:#d00;'>Simulation failed (code {code}).</b>")
+            self._cleanup_backend_file()
 
     # ------------------------------------------------------------------ actions
     def run_simulation(self) -> None:
@@ -295,6 +401,8 @@ class SimulationGUI(QWidget):
             QMessageBox.warning(self, "Running", "Simulation already in progress.")
             return
 
+        self._cleanup_backend_file()
+        self.backend_data = None
         python_exec = sys.executable
         cmd = [
             python_exec,
@@ -354,6 +462,11 @@ class SimulationGUI(QWidget):
         if amps:
             cmd.append("--rf-amplitudes")
             cmd.extend(amps)
+
+        backend_tmp = tempfile.NamedTemporaryFile(prefix="eit_backend_", suffix=".json", delete=False)
+        backend_tmp.close()
+        self.backend_json_path = backend_tmp.name
+        cmd.extend(["--backend-json", self.backend_json_path])
 
         self.output.clear()
         self.output.append("Running: " + " ".join(cmd))
@@ -491,7 +604,7 @@ class SimulationGUI(QWidget):
 def main() -> None:
     app = QApplication(sys.argv)
     gui = SimulationGUI()
-    gui.resize(1600, 900)
+    gui.resize(1900, 1000)
     gui.show()
     sys.exit(app.exec())
 
