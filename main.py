@@ -83,6 +83,14 @@ def f_or_none(value):
     return float(value)
 
 
+def write_backend_file(path: str, payload: Dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as backend_file:
+            json.dump(payload, backend_file, indent=2)
+    except Exception as exc:
+        cprint(f"Failed to write backend JSON: {exc}")
+
+
 def apply_pressure_override(cell: Cell, args: argparse.Namespace) -> float:
     """Optionally override vapor density using user-specified pressure."""
 
@@ -179,6 +187,8 @@ def parse_args() -> argparse.Namespace:
                         help="Fit the transmission curve to extract Δ_peak even when peaks overlap.")
     parser.add_argument("--fit-profile", choices=("gaussian", "lorentzian"), default="gaussian",
                         help="Line shape to use when fitting peaks.")
+    parser.add_argument("--auto-n-only", action="store_true",
+                        help="Only determine the (auto-)selected n/n_p and transition info without running the EIT simulation.")
     parser.add_argument("--sweep-plot", action="store_true",
                         help="Generate an additional Δ_fit vs RF amplitude plot by sweeping many amplitudes.")
     parser.add_argument("--sweep-points", type=int, default=20,
@@ -627,6 +637,31 @@ def main() -> None:
     rf_detuning_mhz = args.rf_frequency - freq_info["rf_res_hz"] / 1e6
     rf_detuning_mrad = 2 * np.pi * rf_detuning_mhz
 
+    if args.auto_n_only:
+        cprint("Auto-n only mode selected; skipping full EIT simulation.")
+        backend_payload = {
+            "selected_n": selected_n,
+            "selected_np": selected_np,
+            "probe_freq_hz": freq_info["probe_freq_hz"],
+            "control_freq_hz": freq_info["control_freq_hz"],
+            "probe_lambda_nm": freq_info["probe_lambda_nm"],
+            "control_lambda_nm": freq_info["control_lambda_nm"],
+            "rf_res_hz": freq_info["rf_res_hz"],
+            "rf_detuning_mhz": float(rf_detuning_mhz),
+            "temperature_K": args.temperature,
+            "pressure_override_torr": args.pressure_torr,
+            "gas_density_m3": gas_density,
+            "gas_pressure_torr": gas_pressure_torr,
+            "baseline_amplitude_v_cm": None,
+            "amplitudes": [],
+            "plots": {},
+            "sweep": None,
+            "auto_n_only": True,
+        }
+        if args.backend_json:
+            write_backend_file(args.backend_json, backend_payload)
+        return
+
     probe_dipole_au = atom.get_dipole_matrix_element(states.intermediate, states.ground, q=0)
     control_dipole_au = atom.get_dipole_matrix_element(states.rydberg_d, states.intermediate, q=0)
     probe_rabi_rad = rabi_from_power(args.probe_power, args.probe_waist, probe_dipole_au)
@@ -894,12 +929,9 @@ def main() -> None:
             "amplitudes": amplitude_results,
             "plots": plots_dict,
             "sweep": sweep_payload,
+            "auto_n_only": False,
         }
-        try:
-            with open(args.backend_json, "w", encoding="utf-8") as backend_file:
-                json.dump(backend_payload, backend_file, indent=2)
-        except Exception as exc:
-            cprint(f"Failed to write backend JSON: {exc}")
+        write_backend_file(args.backend_json, backend_payload)
 
 if __name__ == "__main__":
     main()

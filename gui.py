@@ -78,6 +78,7 @@ class SimulationGUI(QWidget):
         self.control_label_text = ""
         self.auto_n = QCheckBox("Auto select n")
         self.auto_n.setChecked(True)
+        self.auto_n_only = QCheckBox("Auto-n only (skip simulation)")
         
         self.n_value = QLineEdit("50")
         self.np_value = QLineEdit("51")
@@ -179,6 +180,7 @@ class SimulationGUI(QWidget):
         forms.addLayout(misc_group)
         forms.addLayout(toggles_layout)
         forms.addLayout(profile_layout)
+        forms.addWidget(self.auto_n_only)
         forms.addWidget(self.extra_args)
         forms.addWidget(QLabel("All CLI options (from main.py --help)"))
         forms.addWidget(self.cli_help_box, 1)
@@ -322,6 +324,8 @@ class SimulationGUI(QWidget):
         else:
             self._set_preview_paths([])
         self._update_summary_fields(data)
+        if data.get("auto_n_only"):
+            self.output.append("<i>Auto-n only mode: simulation skipped.</i>")
 
     def _update_summary_fields(self, data: dict) -> None:
         entries = {
@@ -450,6 +454,8 @@ class SimulationGUI(QWidget):
         if self.fit_peaks.isChecked():
             cmd.append("--fit-peaks")
             cmd.extend(["--fit-profile", self.fit_profile.currentData()])
+        if self.auto_n_only.isChecked():
+            cmd.append("--auto-n-only")
         if self.enable_sweep_plot.isChecked():
             cmd.append("--sweep-plot")
             if self.sweep_output.text().strip():
