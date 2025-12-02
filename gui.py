@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QGroupBox,
+    QTabWidget,
     QWidget,
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -66,6 +67,7 @@ class SimulationGUI(QWidget):
         self.detuning_span = QLineEdit("300")
         self.detuning_points = QLineEdit("401")
         self.output_file = QLineEdit("eit_rf_gui.png")
+        self.control_detuning = QLineEdit("0.0")
         self.override_pressure = QCheckBox("Override pressure")
         self.pressure_torr = QLineEdit("")
         self.pressure_torr.setEnabled(False)
@@ -74,6 +76,8 @@ class SimulationGUI(QWidget):
         self.sweep_output = QLineEdit("eit_rf_sweep.png")
         self.sweep_output.setEnabled(False)
         self.enable_sweep_plot.toggled.connect(self._toggle_sweep_field)
+        self.sweep_points = QLineEdit("20")
+        self.sweep_points.setEnabled(False)
         self.probe_label_text = ""
         self.control_label_text = ""
         self.auto_n = QCheckBox("Auto select n")
@@ -86,7 +90,7 @@ class SimulationGUI(QWidget):
         self.np_value.setEnabled(False)
         self.auto_n.toggled.connect(self._toggle_n_fields)
         self.normalize = QCheckBox("Normalize baseline")
-        self.baseline_amp = QLineEdit("1000")
+        self.baseline_amp = QLineEdit("")
         self.timing = QCheckBox("Show timing")
         self.no_show = QCheckBox("Skip plot window")
         self.no_show.setChecked(True)
@@ -97,60 +101,10 @@ class SimulationGUI(QWidget):
         self.auto_rotate = QCheckBox("Auto-rotate visualization")
         self.auto_rotate.setChecked(True)
         self.auto_rotate.stateChanged.connect(self._toggle_auto_rotate)
+        self.debug_timing = QCheckBox("Show timing")
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-
-        forms = QVBoxLayout()
-
-        rf_group = self._make_rows([
-            ("Isotope", self.isotope),
-            ("RF frequency (MHz)", self.rf_frequency),
-            ("RF amplitudes (V/cm)", self.rf_amplitudes),
-            ("Temperature (K)", self.temperature),
-            ("Cell length (m)", self.cell_length, "Cell cross (m)", self.cell_cross),
-            ("Probe span (MHz)", self.detuning_span),
-            ("Probe points", self.detuning_points),
-        ])
-        beam_form = self._make_rows([
-            ("Probe power (W)", self.probe_power, "Probe waist (m)", self.probe_waist),
-            ("Control power (W)", self.control_power, "Control waist (m)", self.control_waist),
-        ])
-        state_layout = QHBoxLayout()
-        state_label = QLabel("Level select")
-        state_label.setMinimumWidth(140)
-        state_layout.addWidget(state_label)
-        state_layout.addWidget(self.auto_n)
-        state_layout.addSpacing(10)
-        state_layout.addWidget(QLabel("n"))
-        state_layout.addWidget(self.n_value)
-        state_layout.addWidget(QLabel("n_p"))
-        state_layout.addWidget(self.np_value)
-        pressure_layout = QHBoxLayout()
-        pressure_layout.addWidget(self.override_pressure)
-        pressure_label = QLabel("Custom pressure (Torr)")
-        pressure_label.setMinimumWidth(140)
-        pressure_layout.addWidget(pressure_label)
-        pressure_layout.addWidget(self.pressure_torr)
-        sweep_layout = QHBoxLayout()
-        sweep_layout.addWidget(self.enable_sweep_plot)
-        sweep_label = QLabel("Sweep figure")
-        sweep_label.setMinimumWidth(140)
-        sweep_layout.addWidget(sweep_label)
-        sweep_layout.addWidget(self.sweep_output)
-
-        misc_group = self._make_rows([
-            ("Output figure", self.output_file),
-            ("Baseline RF (V/cm)", self.baseline_amp),
-        ])
-        toggles_layout = QHBoxLayout()
-        toggles_layout.addWidget(self.normalize)
-        toggles_layout.addWidget(self.timing)
-        toggles_layout.addWidget(self.no_show)
-        toggles_layout.addWidget(self.fit_peaks)
-        profile_layout = QHBoxLayout()
-        profile_layout.addWidget(QLabel("Fit profile"))
-        profile_layout.addWidget(self.fit_profile)
 
         self.extra_args = QLineEdit()
         self.extra_args.setPlaceholderText("Extra CLI args (e.g., --doppler-method uniform --doppler-width 3.0)")
@@ -169,25 +123,116 @@ class SimulationGUI(QWidget):
             self.summary_fields[key] = label
         self.summary_box.setLayout(summary_layout)
 
+        # Tabs setup
+        self.tabs = QTabWidget()
+
+        # Simulation tab
+        sim_tab = QWidget()
+        sim_layout = QVBoxLayout()
+        state_layout = QHBoxLayout()
+        state_label = QLabel("Level select")
+        state_label.setMinimumWidth(140)
+        state_layout.addWidget(state_label)
+        state_layout.addWidget(self.auto_n)
+        state_layout.addSpacing(10)
+        state_layout.addWidget(QLabel("n"))
+        state_layout.addWidget(self.n_value)
+        state_layout.addWidget(QLabel("n_p"))
+        state_layout.addWidget(self.np_value)
+        sim_layout.addLayout(self._make_rows([
+            ("Isotope", self.isotope),
+            ("RF frequency (MHz)", self.rf_frequency),
+            ("RF amplitudes (V/cm)", self.rf_amplitudes),
+            ("Probe span (MHz)", self.detuning_span),
+            ("Probe points", self.detuning_points),
+        ]))
+        sim_layout.addWidget(self.auto_n_only)
+        sim_layout.addLayout(state_layout)
+        sim_layout.addStretch()
+        sim_tab.setLayout(sim_layout)
+        self.tabs.addTab(sim_tab, "Simulation")
+
+        # Cell tab
+        cell_tab = QWidget()
+        cell_layout = QVBoxLayout()
+        pressure_layout = QHBoxLayout()
+        pressure_layout.addWidget(self.override_pressure)
+        pressure_label = QLabel("Custom pressure (Torr)")
+        pressure_label.setMinimumWidth(140)
+        pressure_layout.addWidget(pressure_label)
+        pressure_layout.addWidget(self.pressure_torr)
+        cell_layout.addLayout(self._make_rows([
+            ("Temperature (K)", self.temperature),
+            ("Cell length (m)", self.cell_length, "Cell cross (m)", self.cell_cross),
+        ]))
+        cell_layout.addLayout(pressure_layout)
+        cell_layout.addStretch()
+        cell_tab.setLayout(cell_layout)
+        self.tabs.addTab(cell_tab, "Cell")
+
+        # Lasers tab
+        laser_tab = QWidget()
+        laser_layout = QVBoxLayout()
+        laser_layout.addLayout(self._make_rows([
+            ("Probe power (W)", self.probe_power, "Probe waist (m)", self.probe_waist),
+            ("Control power (W)", self.control_power, "Control waist (m)", self.control_waist),
+            ("Control detuning (MHz)", self.control_detuning),
+        ]))
+        laser_layout.addStretch()
+        laser_tab.setLayout(laser_layout)
+        self.tabs.addTab(laser_tab, "Lasers")
+
+        # Plot/Fit tab
+        plot_tab = QWidget()
+        plot_layout = QVBoxLayout()
+        plot_layout.addLayout(self._make_rows([
+            ("Output figure", self.output_file),
+            ("Baseline RF (V/cm)", self.baseline_amp),
+        ]))
+        plot_toggles = QHBoxLayout()
+        plot_toggles.addWidget(self.normalize)
+        plot_toggles.addWidget(self.no_show)
+        plot_toggles.addWidget(self.fit_peaks)
+        plot_layout.addLayout(plot_toggles)
+        profile_layout = QHBoxLayout()
+        profile_layout.addWidget(QLabel("Fit profile"))
+        profile_layout.addWidget(self.fit_profile)
+        plot_layout.addLayout(profile_layout)
+        sweep_layout = QHBoxLayout()
+        sweep_layout.addWidget(self.enable_sweep_plot)
+        sweep_label = QLabel("Sweep figure")
+        sweep_label.setMinimumWidth(140)
+        sweep_layout.addWidget(sweep_label)
+        sweep_layout.addWidget(self.sweep_output)
+        sweep_layout.addWidget(QLabel("Points"))
+        sweep_layout.addWidget(self.sweep_points)
+        plot_layout.addLayout(sweep_layout)
+        plot_layout.addStretch()
+        plot_tab.setLayout(plot_layout)
+        self.tabs.addTab(plot_tab, "Plot/Fit")
+
+        # CLI tab
+        cli_tab = QWidget()
+        cli_layout = QVBoxLayout()
+        cli_layout.addWidget(QLabel("Extra CLI args"))
+        cli_layout.addWidget(self.extra_args)
+        cli_layout.addWidget(QLabel("All CLI options (from main.py --help)"))
+        cli_layout.addWidget(self.cli_help_box, 1)
+        cli_layout.addWidget(QLabel("Simulation log"))
+        cli_layout.addWidget(self.output)
+        cli_tab.setLayout(cli_layout)
+        self.tabs.addTab(cli_tab, "CLI")
+
+        # Debug tab
+        debug_tab = QWidget()
+        debug_layout = QVBoxLayout()
+        debug_layout.addWidget(self.debug_timing)
+        debug_layout.addStretch()
+        debug_tab.setLayout(debug_layout)
+        self.tabs.addTab(debug_tab, "Debug")
+
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
-
-        forms.addLayout(rf_group)
-        forms.addLayout(beam_form)
-        forms.addLayout(state_layout)
-        forms.addLayout(pressure_layout)
-        forms.addLayout(sweep_layout)
-        forms.addLayout(misc_group)
-        forms.addLayout(toggles_layout)
-        forms.addLayout(profile_layout)
-        forms.addWidget(self.auto_n_only)
-        forms.addWidget(self.extra_args)
-        forms.addWidget(QLabel("All CLI options (from main.py --help)"))
-        forms.addWidget(self.cli_help_box, 1)
-        forms.addWidget(QLabel("Simulation log"))
-        self.output.setFixedHeight(120)
-        forms.addWidget(self.output)
-        forms.addSpacing(10)
 
         self.preview_label = QLabel("Preview not available.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -241,7 +286,7 @@ class SimulationGUI(QWidget):
         self.preview_buttons_layout.addWidget(self.next_plot_btn)
 
         content_row = QHBoxLayout()
-        content_row.addLayout(forms, 1)
+        content_row.addWidget(self.tabs, 1)
         content_row.addLayout(log_layout, 1)
 
         bottom_row = QHBoxLayout()
@@ -425,6 +470,8 @@ class SimulationGUI(QWidget):
             self.probe_waist.text().strip(),
             "--control-waist",
             self.control_waist.text().strip(),
+            "--control-detuning",
+            self.control_detuning.text().strip(),
             "--temperature",
             self.temperature.text().strip(),
             "--probe-span",
@@ -449,7 +496,7 @@ class SimulationGUI(QWidget):
                 cmd.extend(["--baseline-rf-amplitude", self.baseline_amp.text().strip()])
         if self.no_show.isChecked():
             cmd.append("--no-show")
-        if self.timing.isChecked():
+        if self.debug_timing.isChecked():
             cmd.append("--timing")
         if self.fit_peaks.isChecked():
             cmd.append("--fit-peaks")
@@ -460,6 +507,8 @@ class SimulationGUI(QWidget):
             cmd.append("--sweep-plot")
             if self.sweep_output.text().strip():
                 cmd.extend(["--sweep-output", self.sweep_output.text().strip()])
+            if self.sweep_points.text().strip():
+                cmd.extend(["--sweep-points", self.sweep_points.text().strip()])
         extra = self.extra_args.text().strip()
         if extra:
             cmd.extend(extra.split())
@@ -517,6 +566,7 @@ class SimulationGUI(QWidget):
 
     def _toggle_sweep_field(self, checked: bool) -> None:
         self.sweep_output.setEnabled(checked)
+        self.sweep_points.setEnabled(checked)
 
     def _set_preview_paths(self, paths: list[str]) -> None:
         self.generated_plots = paths
