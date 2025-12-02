@@ -454,7 +454,7 @@ class SimulationGUI(QWidget):
         else:
             self.output.append(f"<b style='color:#d00;'>Simulation failed (code {code}).</b>")
             self._cleanup_backend_file()
-            self.status_label.setText("Status: Failed")
+            self.status_label.setText("Status: Failed (see CLI tab for more info)")
             self.status_label.setStyleSheet("color: red;")
 
     # ------------------------------------------------------------------ actions
