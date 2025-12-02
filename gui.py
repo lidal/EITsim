@@ -140,7 +140,6 @@ class SimulationGUI(QWidget):
         state_layout.addWidget(QLabel("n_p"))
         state_layout.addWidget(self.np_value)
         sim_layout.addLayout(self._make_rows([
-            ("Isotope", self.isotope),
             ("RF frequency (MHz)", self.rf_frequency),
             ("RF amplitudes (V/cm)", self.rf_amplitudes),
             ("Probe span (MHz)", self.detuning_span),
@@ -162,6 +161,7 @@ class SimulationGUI(QWidget):
         pressure_layout.addWidget(pressure_label)
         pressure_layout.addWidget(self.pressure_torr)
         cell_layout.addLayout(self._make_rows([
+            ("Isotope", self.isotope),
             ("Temperature (K)", self.temperature),
             ("Cell length (m)", self.cell_length, "Cell cross (m)", self.cell_cross),
         ]))
