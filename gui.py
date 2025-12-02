@@ -68,6 +68,9 @@ class SimulationGUI(QWidget):
         self.detuning_points = QLineEdit("401")
         self.output_file = QLineEdit("eit_rf_gui.png")
         self.control_detuning = QLineEdit("0.0")
+        self.transit_rate = QLineEdit("0.15")
+        self.probe_linewidth = QLineEdit("0.01")
+        self.control_linewidth = QLineEdit("0.01")
         self.override_pressure = QCheckBox("Override pressure")
         self.pressure_torr = QLineEdit("")
         self.pressure_torr.setEnabled(False)
@@ -164,6 +167,7 @@ class SimulationGUI(QWidget):
             ("Isotope", self.isotope),
             ("Temperature (K)", self.temperature),
             ("Cell length (m)", self.cell_length, "Cell cross (m)", self.cell_cross),
+            ("Transit rate (MHz)", self.transit_rate),
         ]))
         cell_layout.addLayout(pressure_layout)
         cell_layout.addStretch()
@@ -177,6 +181,7 @@ class SimulationGUI(QWidget):
             ("Probe power (W)", self.probe_power, "Probe waist (m)", self.probe_waist),
             ("Control power (W)", self.control_power, "Control waist (m)", self.control_waist),
             ("Control detuning (MHz)", self.control_detuning),
+            ("Probe linewidth (MHz)", self.probe_linewidth, "Control linewidth (MHz)", self.control_linewidth),
         ]))
         laser_layout.addStretch()
         laser_tab.setLayout(laser_layout)
@@ -474,6 +479,8 @@ class SimulationGUI(QWidget):
             self.control_detuning.text().strip(),
             "--temperature",
             self.temperature.text().strip(),
+            "--transit-rate",
+            self.transit_rate.text().strip(),
             "--probe-span",
             self.detuning_span.text().strip(),
             "--probe-points",
@@ -509,6 +516,10 @@ class SimulationGUI(QWidget):
                 cmd.extend(["--sweep-output", self.sweep_output.text().strip()])
             if self.sweep_points.text().strip():
                 cmd.extend(["--sweep-points", self.sweep_points.text().strip()])
+        if self.probe_linewidth.text().strip():
+            cmd.extend(["--probe-linewidth", self.probe_linewidth.text().strip()])
+        if self.control_linewidth.text().strip():
+            cmd.extend(["--control-linewidth", self.control_linewidth.text().strip()])
         extra = self.extra_args.text().strip()
         if extra:
             cmd.extend(extra.split())

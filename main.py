@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import matplotlib
-matplotlib.use("Qt5Agg")  # or "Qt5Agg" if PyQt5 is installed
+matplotlib.use("QtAgg")  
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -157,9 +157,9 @@ def parse_args() -> argparse.Namespace:
                         help="Propagation direction of the probe beam (+z or -z) for Doppler shifts.")
     parser.add_argument("--control-direction", type=int, choices=(-1, 1), default=-1,
                         help="Propagation direction of the control beam for Doppler shifts.")
-    parser.add_argument("--probe-linewidth", type=float, default=0.0,
+    parser.add_argument("--probe-linewidth", type=float, default=0.01,
                         help="Probe laser linewidth (FWHM) in MHz added to decoherence.")
-    parser.add_argument("--control-linewidth", type=float, default=0.0,
+    parser.add_argument("--control-linewidth", type=float, default=0.01,
                         help="Control laser linewidth (FWHM) in MHz added to decoherence.")
     parser.add_argument("--doppler-method", choices=("split", "uniform", "isopop"), default="split",
                         help="Sampling strategy for Doppler averaging.")
@@ -688,6 +688,9 @@ def main() -> None:
     vprint(args.verbose,
            f"Doppler averaging {'enabled' if doppler_enabled else 'disabled'} "
            f"(T={args.temperature} K).")
+
+    if not args.rf_amplitudes:
+        raise ValueError("At least one RF amplitude must be provided via --rf-amplitudes.")
 
     results = [
         _simulate_task((
