@@ -157,9 +157,9 @@ def parse_args() -> argparse.Namespace:
                         help="Propagation direction of the probe beam (+z or -z) for Doppler shifts.")
     parser.add_argument("--control-direction", type=int, choices=(-1, 1), default=-1,
                         help="Propagation direction of the control beam for Doppler shifts.")
-    parser.add_argument("--probe-linewidth", type=float, default=0.01,
+    parser.add_argument("--probe-linewidth", type=float, default=0.00,
                         help="Probe laser linewidth (FWHM) in MHz added to decoherence.")
-    parser.add_argument("--control-linewidth", type=float, default=0.01,
+    parser.add_argument("--control-linewidth", type=float, default=0.00,
                         help="Control laser linewidth (FWHM) in MHz added to decoherence.")
     parser.add_argument("--doppler-method", choices=("split", "uniform", "isopop"), default="split",
                         help="Sampling strategy for Doppler averaging.")
