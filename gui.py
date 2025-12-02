@@ -238,6 +238,8 @@ class SimulationGUI(QWidget):
 
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
+        self.status_label = QLabel("Status: Idle")
+        self.status_label.setStyleSheet("color: green;")
 
         self.preview_label = QLabel("Preview not available.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -296,6 +298,8 @@ class SimulationGUI(QWidget):
 
         bottom_row = QHBoxLayout()
         bottom_row.addWidget(self.run_button)
+        bottom_row.addSpacing(10)
+        bottom_row.addWidget(self.status_label)
         bottom_row.addStretch()
         bottom_row.addLayout(self.preview_buttons_layout)
 
@@ -441,6 +445,8 @@ class SimulationGUI(QWidget):
         code = self.process.exitCode()
         if code == 0:
             self.output.append("<b>Simulation finished successfully.</b>")
+            self.status_label.setText("Status: Finished")
+            self.status_label.setStyleSheet("color: green;")
             loaded = self._load_backend_results()
             if not loaded:
                 self._update_preview()
@@ -448,6 +454,8 @@ class SimulationGUI(QWidget):
         else:
             self.output.append(f"<b style='color:#d00;'>Simulation failed (code {code}).</b>")
             self._cleanup_backend_file()
+            self.status_label.setText("Status: Failed")
+            self.status_label.setStyleSheet("color: red;")
 
     # ------------------------------------------------------------------ actions
     def run_simulation(self) -> None:
@@ -457,6 +465,8 @@ class SimulationGUI(QWidget):
 
         self._cleanup_backend_file()
         self.backend_data = None
+        self.status_label.setText("Status: Running…")
+        self.status_label.setStyleSheet("color: orange;")
         python_exec = sys.executable
         cmd = [
             python_exec,
