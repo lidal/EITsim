@@ -713,7 +713,12 @@ def main() -> None:
 
     baseline_transmission = None
     baseline_amp_used = None
-    baseline_needed = args.normalize_baseline or args.baseline_rf_amplitude is not None or args.fit_peaks
+    baseline_needed = (
+        args.normalize_baseline
+        or args.baseline_rf_amplitude is not None
+        or args.fit_peaks
+        or args.sweep_plot
+    )
     if baseline_needed and len(raw_transmissions) > 0:
         if args.baseline_rf_amplitude is not None:
             baseline_amp = args.baseline_rf_amplitude
