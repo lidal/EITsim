@@ -44,6 +44,7 @@ RB_MASSES = {
 }
 ARC_DATA_LOCK = Lock()
 BACKEND_MODE = False
+BACKEND_LOGS = []
 
 
 @dataclass(frozen=True)
@@ -63,13 +64,16 @@ class SimulationStates:
 
 
 def cprint(message: str) -> None:
+    BACKEND_LOGS.append(str(message))
     if not BACKEND_MODE:
         print(message)
 
 
 def vprint(enabled: bool, message: str) -> None:
-    if enabled and not BACKEND_MODE:
-        print(message)
+    if enabled:
+        BACKEND_LOGS.append(str(message))
+        if not BACKEND_MODE:
+            print(message)
 
 
 def f_or_none(value):
@@ -970,6 +974,7 @@ def main() -> None:
             "plots": plots_dict,
             "sweep": sweep_payload,
             "auto_n_only": False,
+            "logs": BACKEND_LOGS,
         }
         write_backend_file(args.backend_json, backend_payload)
 

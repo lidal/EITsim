@@ -124,6 +124,8 @@ class SimulationGUI(QWidget):
         self.auto_rotate.stateChanged.connect(self._toggle_auto_rotate)
         self.debug_timing = QCheckBox("Show timing")
         self.debug_timing.setChecked(bool(self.defaults.get("debug_timing", False)))
+        self.debug_verbose = QCheckBox("Verbose (decoder/backend)")
+        self.debug_verbose.setChecked(bool(self.defaults.get("verbose", False)))
 
         # Decoder inputs
         self.dec_n = QLineEdit("50")
@@ -258,14 +260,6 @@ class SimulationGUI(QWidget):
         cli_tab.setLayout(cli_layout)
         self.tabs.addTab(cli_tab, "CLI")
 
-        # Debug tab
-        debug_tab = QWidget()
-        debug_layout = QVBoxLayout()
-        debug_layout.addWidget(self.debug_timing)
-        debug_layout.addStretch()
-        debug_tab.setLayout(debug_layout)
-        self.tabs.addTab(debug_tab, "Debug")
-
         # Decoder tab
         decoder_tab = QWidget()
         decoder_layout = QVBoxLayout()
@@ -282,6 +276,15 @@ class SimulationGUI(QWidget):
         decoder_layout.addWidget(self.decoder_output)
         decoder_tab.setLayout(decoder_layout)
         self.tabs.addTab(decoder_tab, "Decoder")
+
+        # Debug tab
+        debug_tab = QWidget()
+        debug_layout = QVBoxLayout()
+        debug_layout.addWidget(self.debug_timing)
+        debug_layout.addWidget(self.debug_verbose)
+        debug_layout.addStretch()
+        debug_tab.setLayout(debug_layout)
+        self.tabs.addTab(debug_tab, "Debug")
 
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
@@ -445,6 +448,11 @@ class SimulationGUI(QWidget):
         self._update_summary_fields(data)
         if data.get("auto_n_only"):
             self.output.append("<i>Auto-n only mode: simulation skipped.</i>")
+        logs = data.get("logs")
+        if logs:
+            self.output.append("<b>Backend logs:</b>")
+            for line in logs:
+                self.output.append(str(line))
 
     def _update_summary_fields(self, data: dict) -> None:
         entries = {
@@ -642,6 +650,8 @@ class SimulationGUI(QWidget):
             cmd.append("--no-show")
         if self.debug_timing.isChecked():
             cmd.append("--timing")
+        if self.debug_verbose.isChecked():
+            cmd.append("--verbose")
         if self.fit_peaks.isChecked():
             cmd.append("--fit-peaks")
             cmd.extend(["--fit-profile", self.fit_profile.currentData()])

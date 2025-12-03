@@ -30,6 +30,6 @@
   "override_pressure": false,
   "fit_profile": "gaussian",
   "extra_args": "",
-  "sweep_plot": true,
-  "debug_timing": false
+  "debug_timing": false,
+  "verbose": false
 }
