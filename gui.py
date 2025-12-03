@@ -6,6 +6,7 @@ import sys
 import json
 import tempfile
 from pathlib import Path
+from collections import OrderedDict
 
 
 import matplotlib
@@ -53,7 +54,9 @@ class SimulationGUI(QWidget):
         self.process.readyReadStandardOutput.connect(self._read_stdout)
         self.process.readyReadStandardError.connect(self._read_stderr)
         self.process.finished.connect(self._process_finished)
+        self.base_defaults = self._load_config(base_only=True)
         self.defaults = self._load_config()
+        self.save_order = list(self.base_defaults.keys() or self.defaults.keys())
         self.isotope = QComboBox()
         self.isotope.addItems(["Rb87", "Rb85"])
         self.isotope.setCurrentText(self.defaults.get("isotope", "Rb87"))
@@ -79,7 +82,8 @@ class SimulationGUI(QWidget):
         self.pressure_torr.setEnabled(False)
         self.override_pressure.toggled.connect(self._toggle_pressure_field)
         self.enable_sweep_plot = QCheckBox("Generate sweep plot")
-        self.enable_sweep_plot.setChecked(bool(self.defaults.get("enable_sweep_plot", False)))
+        self.enable_sweep_plot.setChecked(bool(self.defaults.get("enable_sweep_plot",
+                                                                 self.defaults.get("sweep_plot", False))))
         self.sweep_output = QLineEdit(self.defaults.get("sweep_output", "eit_rf_sweep.png"))
         self.sweep_output.setEnabled(self.enable_sweep_plot.isChecked())
         self.enable_sweep_plot.toggled.connect(self._toggle_sweep_field)
@@ -253,6 +257,8 @@ class SimulationGUI(QWidget):
 
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
+        self.save_config_btn = QPushButton("Save Config")
+        self.save_config_btn.clicked.connect(self._save_custom_config)
         self.status_label = QLabel("Status: Idle")
         self.status_label.setStyleSheet("color: green;")
 
@@ -312,6 +318,7 @@ class SimulationGUI(QWidget):
         content_row.addLayout(log_layout, 1)
 
         bottom_row = QHBoxLayout()
+        bottom_row.addWidget(self.save_config_btn)
         bottom_row.addWidget(self.run_button)
         bottom_row.addSpacing(10)
         bottom_row.addWidget(self.status_label)
@@ -435,6 +442,50 @@ class SimulationGUI(QWidget):
         for key, label in self.summary_fields.items():
             value = entries.get(key)
             label.setText(str(value) if value is not None else "—")
+
+    def _gather_config(self) -> dict:
+        entries = {
+            "isotope": self.isotope.currentText(),
+            "rf_frequency": self.rf_frequency.text().strip(),
+            "rf_amplitudes": self.rf_amplitudes.text().strip(),
+            "probe_power": self.probe_power.text().strip(),
+            "control_power": self.control_power.text().strip(),
+            "probe_waist": self.probe_waist.text().strip(),
+            "control_waist": self.control_waist.text().strip(),
+            "cell_length": self.cell_length.text().strip(),
+            "cell_cross": self.cell_cross.text().strip(),
+            "temperature": self.temperature.text().strip(),
+            "detuning_span": self.detuning_span.text().strip(),
+            "detuning_points": self.detuning_points.text().strip(),
+            "output_file": self.output_file.text().strip(),
+            "control_detuning": self.control_detuning.text().strip(),
+            "transit_rate": self.transit_rate.text().strip(),
+            "probe_linewidth": self.probe_linewidth.text().strip(),
+            "control_linewidth": self.control_linewidth.text().strip(),
+            "baseline_amp": self.baseline_amp.text().strip(),
+            "sweep_output": self.sweep_output.text().strip(),
+            "sweep_points": self.sweep_points.text().strip(),
+            "auto_n": self.auto_n.isChecked(),
+            "auto_n_only": self.auto_n_only.isChecked(),
+            "normalize_baseline": self.normalize.isChecked(),
+            "timing": self.timing.isChecked(),
+            "no_show": self.no_show.isChecked(),
+            "fit_peaks": self.fit_peaks.isChecked(),
+            "enable_sweep_plot": self.enable_sweep_plot.isChecked(),
+            "sweep_plot": self.enable_sweep_plot.isChecked(),
+            "auto_rotate": self.auto_rotate.isChecked(),
+            "override_pressure": self.override_pressure.isChecked(),
+            "fit_profile": self.fit_profile.currentData(),
+            "extra_args": self.extra_args.text().strip(),
+            "debug_timing": self.debug_timing.isChecked(),
+        }
+        ordered = OrderedDict()
+        for key in self.save_order:
+            if key in entries:
+                ordered[key] = entries.pop(key)
+        for k, v in entries.items():
+            ordered[k] = v
+        return ordered
     def _load_cli_help(self) -> str:
         try:
             result = subprocess.run(
@@ -453,12 +504,14 @@ class SimulationGUI(QWidget):
         except Exception as exc:
             return f"Failed to load CLI options: {exc}"
 
-    def _load_config(self) -> dict:
-        cfg_path = REPO_ROOT / "GUIconfig.json"
-        if not cfg_path.exists():
+    def _load_config(self, base_only: bool = False) -> dict:
+        custom_path = REPO_ROOT / "customGUIconfig.json"
+        cfg_path = REPO_ROOT / "defaultGUIconfig.json"
+        path = cfg_path if base_only or not custom_path.exists() else custom_path
+        if not path.exists():
             return {}
         try:
-            with cfg_path.open("r", encoding="utf-8") as fh:
+            with path.open("r", encoding="utf-8") as fh:
                 return json.load(fh)
         except Exception:
             return {}
@@ -697,6 +750,16 @@ class SimulationGUI(QWidget):
         if self.preview_index + 1 < len(self.generated_plots):
             self.preview_index += 1
             self._refresh_preview_label()
+
+    def _save_custom_config(self) -> None:
+        cfg = self._gather_config()
+        path = REPO_ROOT / "customGUIconfig.json"
+        try:
+            with path.open("w", encoding="utf-8") as fh:
+                json.dump(cfg, fh, indent=2)
+            QMessageBox.information(self, "Config saved", f"Saved current settings to:\n{path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", f"Could not save config:\n{exc}")
 
     def _parse_wavelengths(self, text: str) -> None:
         probe_match = re.search(r"Probe transition:.*?~([\d\.]+)\s+nm", text)
