@@ -53,39 +53,44 @@ class SimulationGUI(QWidget):
         self.process.readyReadStandardOutput.connect(self._read_stdout)
         self.process.readyReadStandardError.connect(self._read_stderr)
         self.process.finished.connect(self._process_finished)
+        self.defaults = self._load_config()
         self.isotope = QComboBox()
         self.isotope.addItems(["Rb87", "Rb85"])
-        self.rf_frequency = QLineEdit("2377")
-        self.rf_amplitudes = QLineEdit("0 0.01 0.05 0.1")
-        self.probe_power = QLineEdit("1e-4")
-        self.control_power = QLineEdit("10e-3")
-        self.probe_waist = QLineEdit("100e-6")
-        self.control_waist = QLineEdit("100e-6")
-        self.cell_length = QLineEdit("0.10")
-        self.cell_cross = QLineEdit("0.02")
-        self.temperature = QLineEdit("300")
-        self.detuning_span = QLineEdit("300")
-        self.detuning_points = QLineEdit("401")
-        self.output_file = QLineEdit("eit_rf_gui.png")
-        self.control_detuning = QLineEdit("0.0")
-        self.transit_rate = QLineEdit("0.15")
-        self.probe_linewidth = QLineEdit("0.01")
-        self.control_linewidth = QLineEdit("0.01")
+        self.isotope.setCurrentText(self.defaults.get("isotope", "Rb87"))
+        self.rf_frequency = QLineEdit(self.defaults.get("rf_frequency", "2377"))
+        self.rf_amplitudes = QLineEdit(self.defaults.get("rf_amplitudes", "0 0.01 0.05 0.1"))
+        self.probe_power = QLineEdit(self.defaults.get("probe_power", "1e-4"))
+        self.control_power = QLineEdit(self.defaults.get("control_power", "10e-3"))
+        self.probe_waist = QLineEdit(self.defaults.get("probe_waist", "100e-6"))
+        self.control_waist = QLineEdit(self.defaults.get("control_waist", "100e-6"))
+        self.cell_length = QLineEdit(self.defaults.get("cell_length", "0.10"))
+        self.cell_cross = QLineEdit(self.defaults.get("cell_cross", "0.02"))
+        self.temperature = QLineEdit(self.defaults.get("temperature", "300"))
+        self.detuning_span = QLineEdit(self.defaults.get("detuning_span", "300"))
+        self.detuning_points = QLineEdit(self.defaults.get("detuning_points", "401"))
+        self.output_file = QLineEdit(self.defaults.get("output_file", "eit_rf_gui.png"))
+        self.control_detuning = QLineEdit(self.defaults.get("control_detuning", "0.0"))
+        self.transit_rate = QLineEdit(self.defaults.get("transit_rate", "0.15"))
+        self.probe_linewidth = QLineEdit(self.defaults.get("probe_linewidth", "0.01"))
+        self.control_linewidth = QLineEdit(self.defaults.get("control_linewidth", "0.01"))
         self.override_pressure = QCheckBox("Override pressure")
+        self.override_pressure.setChecked(bool(self.defaults.get("override_pressure", False)))
         self.pressure_torr = QLineEdit("")
         self.pressure_torr.setEnabled(False)
         self.override_pressure.toggled.connect(self._toggle_pressure_field)
         self.enable_sweep_plot = QCheckBox("Generate sweep plot")
-        self.sweep_output = QLineEdit("eit_rf_sweep.png")
-        self.sweep_output.setEnabled(False)
+        self.enable_sweep_plot.setChecked(bool(self.defaults.get("enable_sweep_plot", False)))
+        self.sweep_output = QLineEdit(self.defaults.get("sweep_output", "eit_rf_sweep.png"))
+        self.sweep_output.setEnabled(self.enable_sweep_plot.isChecked())
         self.enable_sweep_plot.toggled.connect(self._toggle_sweep_field)
-        self.sweep_points = QLineEdit("20")
-        self.sweep_points.setEnabled(False)
+        self.sweep_points = QLineEdit(self.defaults.get("sweep_points", "20"))
+        self.sweep_points.setEnabled(self.enable_sweep_plot.isChecked())
         self.probe_label_text = ""
         self.control_label_text = ""
         self.auto_n = QCheckBox("Auto select n")
-        self.auto_n.setChecked(True)
+        self.auto_n.setChecked(bool(self.defaults.get("auto_n", True)))
         self.auto_n_only = QCheckBox("Auto-n only (skip simulation)")
+        self.auto_n_only.setChecked(bool(self.defaults.get("auto_n_only", False)))
         
         self.n_value = QLineEdit("50")
         self.np_value = QLineEdit("51")
@@ -93,24 +98,34 @@ class SimulationGUI(QWidget):
         self.np_value.setEnabled(False)
         self.auto_n.toggled.connect(self._toggle_n_fields)
         self.normalize = QCheckBox("Normalize baseline")
-        self.baseline_amp = QLineEdit("")
+        self.normalize.setChecked(bool(self.defaults.get("normalize_baseline", False)))
+        self.baseline_amp = QLineEdit(self.defaults.get("baseline_amp", "1000"))
         self.timing = QCheckBox("Show timing")
+        self.timing.setChecked(bool(self.defaults.get("timing", False)))
         self.no_show = QCheckBox("Skip plot window")
-        self.no_show.setChecked(True)
+        self.no_show.setChecked(bool(self.defaults.get("no_show", True)))
         self.fit_peaks = QCheckBox("Fit peaks")
+        self.fit_peaks.setChecked(bool(self.defaults.get("fit_peaks", False)))
         self.fit_profile = QComboBox()
         self.fit_profile.addItem("Gaussian", "gaussian")
         self.fit_profile.addItem("Lorentzian", "lorentzian")
+        fit_profile_default = self.defaults.get("fit_profile", "gaussian")
+        idx = self.fit_profile.findData(fit_profile_default)
+        if idx >= 0:
+            self.fit_profile.setCurrentIndex(idx)
         self.auto_rotate = QCheckBox("Auto-rotate visualization")
-        self.auto_rotate.setChecked(True)
+        self.auto_rotate.setChecked(bool(self.defaults.get("auto_rotate", True)))
         self.auto_rotate.stateChanged.connect(self._toggle_auto_rotate)
         self.debug_timing = QCheckBox("Show timing")
+        self.debug_timing.setChecked(bool(self.defaults.get("debug_timing", False)))
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
 
         self.extra_args = QLineEdit()
         self.extra_args.setPlaceholderText("Extra CLI args (e.g., --doppler-method uniform --doppler-width 3.0)")
+        if self.defaults.get("extra_args"):
+            self.extra_args.setText(self.defaults["extra_args"])
         self.cli_help_box = QTextEdit()
         self.cli_help_box.setReadOnly(True)
         self.cli_help_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -437,6 +452,16 @@ class SimulationGUI(QWidget):
             return text.strip("\n")
         except Exception as exc:
             return f"Failed to load CLI options: {exc}"
+
+    def _load_config(self) -> dict:
+        cfg_path = REPO_ROOT / "GUIconfig.json"
+        if not cfg_path.exists():
+            return {}
+        try:
+            with cfg_path.open("r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return {}
 
     # ------------------------------------------------------------------ helpers
     def _read_stdout(self) -> None:
