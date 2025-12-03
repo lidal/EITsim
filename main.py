@@ -450,6 +450,29 @@ def peak_spacing(detunings_mhz: np.ndarray, transmission: np.ndarray) -> float:
     return abs(detunings_mhz[pos_idx] - detunings_mhz[neg_idx])
 
 
+def peak_ratio(detunings_mhz: np.ndarray, transmission: np.ndarray):
+    """Return ratio, peak heights, and midpoint of dominant negative/positive peaks (neg/pos)."""
+    peak_indices, _ = find_peaks(transmission)
+    if peak_indices.size == 0:
+        return np.nan, np.nan, np.nan, np.nan
+
+    negatives = [idx for idx in peak_indices if detunings_mhz[idx] < 0]
+    positives = [idx for idx in peak_indices if detunings_mhz[idx] > 0]
+
+    if not negatives or not positives:
+        return np.nan, np.nan, np.nan, np.nan
+
+    neg_idx = max(negatives, key=lambda i: transmission[i])
+    pos_idx = max(positives, key=lambda i: transmission[i])
+
+    if transmission[pos_idx] == 0:
+        ratio = np.nan
+    else:
+        ratio = transmission[neg_idx] / transmission[pos_idx]
+    midpoint = 0.5 * (detunings_mhz[pos_idx] + detunings_mhz[neg_idx])
+    return ratio, transmission[neg_idx], transmission[pos_idx], midpoint
+
+
 def _double_gaussian(det, center, splitting, width, amp1, amp2, offset):
     half = splitting / 2.0
     term1 = amp1 * np.exp(-0.5 * ((det - (center - half)) / width) ** 2)
@@ -780,6 +803,10 @@ def main() -> None:
         )
         df_value = (freq_info["control_lambda_nm"] / freq_info["probe_lambda_nm"]) * rf_rabi_mhz
         measured_spacing = peak_spacing(probe_detuning_mhz, fitting_curve)
+        ratio_curve = fitting_curve
+        if baseline_transmission is not None:
+            ratio_curve = fitting_curve - baseline_transmission
+        measured_ratio, neg_peak_height, pos_peak_height, peak_midpoint = peak_ratio(probe_detuning_mhz, ratio_curve)
         spacing_text = "Δ_peak=NA" if np.isnan(measured_spacing) else f"Δ_peak={measured_spacing:.2f} MHz"
         if np.isnan(expected_split_mhz):
             expected_text = f"Δ_AT=NA (Df={df_value:.2f} MHz)"
@@ -823,6 +850,10 @@ def main() -> None:
             "expected_split_mhz": f_or_none(expected_split_mhz),
             "delta_peak_mhz": f_or_none(measured_spacing),
             "delta_fit_mhz": f_or_none(fit_spacing_value),
+            "peak_ratio": f_or_none(measured_ratio),
+            "peak_height_neg": f_or_none(neg_peak_height),
+            "peak_height_pos": f_or_none(pos_peak_height),
+            "peak_center_mhz": f_or_none(peak_midpoint),
         })
 
     ax.set_xlabel("Probe detuning (MHz)")
@@ -867,7 +898,7 @@ def main() -> None:
                 if args.normalize_baseline and baseline_transmission is not None:
                     sweep_curve = sweep_curve - baseline_transmission
                 measured_spacing = peak_spacing(probe_detuning_mhz, sweep_curve)
-                df_value = (freq_info["control_lambda_nm"] / freq_info["probe_lambda_nm"]) * rf_rabi_mhz
+                df_value = (freq_info["control_lambda_nm"] / freq_info["probe_lambda_nm"]) * rf_rabi_mhz/1.58
                 df_splittings.append(df_value)
                 guess_for_fit = measured_spacing if not np.isnan(measured_spacing) else df_value
                 if guess_for_fit is None or np.isnan(guess_for_fit) or guess_for_fit <= 0:
@@ -887,7 +918,7 @@ def main() -> None:
                 sweep_splittings.append(fit_spacing)
             fig_sweep, ax_sweep = plt.subplots(figsize=(7, 4))
             ax_sweep.plot(sweep_fields, sweep_splittings, "o-", label="Δ_fit")
-            ax_sweep.plot(sweep_fields, df_splittings, "--", label="Ω_RF * λ_c/λ_p expectation")
+            ax_sweep.plot(sweep_fields, df_splittings, "--", label="Ω_RF * λ_c/λ_p expectation/1.58")
             ax_sweep.set_xlabel("RF amplitude (V/cm)")
             ax_sweep.set_ylabel("Splitting (MHz)")
             ax_sweep.set_title(f"Δ_fit vs RF amplitude (n={selected_n})")
@@ -898,10 +929,11 @@ def main() -> None:
             cprint(f"Saved sweep plot to {args.sweep_output}")
             sweep_payload = {
                 "fields_v_cm": [float(val) for val in sweep_fields],
-                "delta_fit_mhz": [f_or_none(val) for val in sweep_splittings],
-                "df_mhz": [f_or_none(val) for val in df_splittings],
-                "plot": str(Path(args.sweep_output).resolve()),
-            }
+            "delta_fit_mhz": [f_or_none(val) for val in sweep_splittings],
+            "peak_ratio": None,
+            "df_mhz": [f_or_none(val) for val in df_splittings],
+            "plot": str(Path(args.sweep_output).resolve()),
+        }
 
     if args.timing and t_start is not None:
         elapsed = time.perf_counter() - t_start

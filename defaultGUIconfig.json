@@ -25,7 +25,7 @@
   "timing": false,
   "no_show": true,
   "fit_peaks": true,
-  "enable_sweep_plot": false,
+  "enable_sweep_plot": true,
   "auto_rotate": true,
   "override_pressure": false,
   "fit_profile": "gaussian",

@@ -67,8 +67,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measured-splitting", type=float, required=True,
                         help="Measured peak-to-peak splitting (MHz) from the experiment.")
     parser.add_argument("--peak-ratio", type=float, default=1.0,
-                        help="Measured peak height ratio (left/right). Used to infer RF detuning. Defaults to 1.0.")
-    parser.add_argument("--df-correction", type=float, default=1.6,
+                        help="Measured peak height ratio (left/right). Used to infer RF detuning when no peak offset is provided. Defaults to 1.0.")
+    parser.add_argument("--peak-offset", type=float, default=None,
+                        help="Measured midpoint of the two peaks relative to probe resonance (MHz). "
+                             "If provided, used to infer detuning directly (preferred over peak ratio).")
+    parser.add_argument("--df-correction", type=float, default=1.58,
                         help="Multiplicative correction factor applied to the Df slope (default 1.6).")
     parser.add_argument("--output", type=str, default=None,
                         help="Optional JSON output file with the decoded results.")
@@ -99,23 +102,29 @@ def decode():
     dipole_au = atom.get_dipole_matrix_element(states.rydberg_p, states.rydberg_d, q=0)
     dipole_si = dipole_au * 5.29177210903e-11 * 1.602176634e-19  # Bohr radius * e (C·m)
 
-    lambda_ratio = (wl["control_lambda_nm"] / wl["probe_lambda_nm"]) * args.df_correction
+    lambda_ratio = (wl["control_lambda_nm"] / wl["probe_lambda_nm"]) / args.df_correction
     meas = args.measured_splitting
 
-    # Infer Ω_RF and Δ_RF from splitting and peak ratio.
+    # Infer Ω_RF and Δ_RF from splitting plus either midpoint (preferred) or peak ratio.
     # Model: splitting_obs = lambda_ratio * sqrt(Ω_RF^2 + Δ_RF^2)
+    # Midpoint (peak_offset) ≈ lambda_ratio * Δ_RF
     # Peak height ratio R ≈ ((Ω_RF + Δ_RF)/(Ω_RF - Δ_RF))^2 -> sqrt(R) = (Ω+Δ)/(Ω-Δ)
-    a = np.sqrt(args.peak_ratio)
-    if a <= 0 or np.isclose(a, 1.0):
-        # Symmetric peaks imply Δ_RF ~ 0
-        omega_rf_mhz = meas * (wl["probe_lambda_nm"] / wl["control_lambda_nm"]) * args.df_correction
-        delta_rf_mhz = 0.0
+    if args.peak_offset is not None:
+        delta_rf_mhz = args.peak_offset / lambda_ratio * args.df_correction
+        under = (meas / lambda_ratio) ** 2 - delta_rf_mhz ** 2 
+        omega_rf_mhz = np.sqrt(max(0.0, under)) 
     else:
-        # Solve for Ω_RF using both equations
-        ratio_term = (a - 1) / (a + 1)
-        denom = np.sqrt(1 + ratio_term ** 2)
-        omega_rf_mhz = (meas / lambda_ratio) / denom
-        delta_rf_mhz = omega_rf_mhz * ratio_term
+        a = np.sqrt(args.peak_ratio)
+        if a <= 0 or np.isclose(a, 1.0):
+            # Symmetric peaks imply Δ_RF ~ 0
+            omega_rf_mhz = meas * (wl["probe_lambda_nm"] / wl["control_lambda_nm"]) / args.df_correction
+            delta_rf_mhz = 0.0
+        else:
+            # Solve for Ω_RF using both equations
+            ratio_term = (a - 1) / (a + 1)
+            denom = np.sqrt(1 + ratio_term ** 2)
+            omega_rf_mhz = (meas / lambda_ratio) / denom
+            delta_rf_mhz = omega_rf_mhz * ratio_term
 
     omega_rf_rad_s = omega_rf_mhz * 1e6 * 2 * np.pi
     if dipole_si == 0:
@@ -136,6 +145,7 @@ def decode():
         "omega_rf_mhz_est": omega_rf_mhz,
         "e_field_v_cm_est": e_field_v_cm,
         "peak_ratio": args.peak_ratio,
+        "peak_offset_mhz": args.peak_offset,
         "df_correction": args.df_correction,
     }
 

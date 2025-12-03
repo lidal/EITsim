@@ -125,6 +125,15 @@ class SimulationGUI(QWidget):
         self.debug_timing = QCheckBox("Show timing")
         self.debug_timing.setChecked(bool(self.defaults.get("debug_timing", False)))
 
+        # Decoder inputs
+        self.dec_n = QLineEdit("50")
+        self.dec_np = QLineEdit("")
+        self.dec_split = QLineEdit("10.0")
+        self.dec_offset = QLineEdit("0.0")
+        self.dec_df_correction = QLineEdit("1.58")
+        self.decoder_output = QTextEdit()
+        self.decoder_output.setReadOnly(True)
+
         self.output = QTextEdit()
         self.output.setReadOnly(True)
 
@@ -141,7 +150,7 @@ class SimulationGUI(QWidget):
         summary_layout = QFormLayout()
         self.summary_fields = {}
         for key in ("Selected n", "Selected n_p", "Probe transition", "Coupling transition",
-                    "RF transition", "RF detuning"):
+                    "RF transition", "RF detuning", "Last peak ratio", "Last peak offset"):
             label = QLabel("—")
             summary_layout.addRow(key + ":", label)
             self.summary_fields[key] = label
@@ -257,12 +266,31 @@ class SimulationGUI(QWidget):
         debug_tab.setLayout(debug_layout)
         self.tabs.addTab(debug_tab, "Debug")
 
+        # Decoder tab
+        decoder_tab = QWidget()
+        decoder_layout = QVBoxLayout()
+        decoder_layout.addLayout(self._make_rows([
+            ("n", self.dec_n, "n_p", self.dec_np),
+            ("Measured splitting (MHz)", self.dec_split),
+            ("Peak offset (MHz)", self.dec_offset),
+            ("Df correction", self.dec_df_correction),
+        ]))
+        self.decode_button = QPushButton("Run Decoder")
+        self.decode_button.clicked.connect(self._run_decoder)
+        decoder_layout.addWidget(self.decode_button)
+        decoder_layout.addWidget(QLabel("Decoder output"))
+        decoder_layout.addWidget(self.decoder_output)
+        decoder_tab.setLayout(decoder_layout)
+        self.tabs.addTab(decoder_tab, "Decoder")
+
         self.run_button = QPushButton("Run Simulation")
         self.run_button.clicked.connect(self.run_simulation)
         self.save_config_btn = QPushButton("Save Config")
         self.save_config_btn.clicked.connect(self._save_custom_config)
         self.status_label = QLabel("Status: Idle")
         self.status_label.setStyleSheet("color: green;")
+        self.decoder_status_label = QLabel("Decoder: Idle")
+        self.decoder_status_label.setStyleSheet("color: green;")
 
         self.preview_label = QLabel("Preview not available.")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -327,6 +355,8 @@ class SimulationGUI(QWidget):
         bottom_row.addWidget(self.run_button)
         bottom_row.addSpacing(10)
         bottom_row.addWidget(self.status_label)
+        bottom_row.addSpacing(10)
+        bottom_row.addWidget(self.decoder_status_label)
         bottom_row.addStretch()
         bottom_row.addLayout(self.preview_buttons_layout)
 
@@ -443,6 +473,8 @@ class SimulationGUI(QWidget):
             entries["RF detuning"] = f"{rf_det:+.3f} MHz"
         else:
             entries["RF detuning"] = None
+        entries["Last peak ratio"] = data.get("amplitudes", [{}])[-1].get("peak_ratio") if data.get("amplitudes") else None
+        entries["Last peak offset"] = data.get("amplitudes", [{}])[-1].get("peak_center_mhz") if data.get("amplitudes") else None
 
         for key, label in self.summary_fields.items():
             value = entries.get(key)
@@ -777,6 +809,53 @@ class SimulationGUI(QWidget):
             QMessageBox.information(self, "Save plot", f"Saved plot to:\n{dest_path}")
         except Exception as exc:
             QMessageBox.warning(self, "Save plot", f"Failed to save plot:\n{exc}")
+
+    def _run_decoder(self) -> None:
+        self.decoder_output.setPlainText("Decoder running…")
+        self.decoder_status_label.setText("Decoder: Running…")
+        self.decoder_status_label.setStyleSheet("color: orange;")
+        QApplication.processEvents()
+        self.decode_button.setEnabled(False)
+        python_exec = sys.executable
+        cmd = [
+            python_exec,
+            str(REPO_ROOT / "decoder.py"),
+            "--isotope", self.isotope.currentText(),
+            "--n", self.dec_n.text().strip(),
+            "--measured-splitting", self.dec_split.text().strip(),
+            "--peak-offset", self.dec_offset.text().strip(),
+            "--df-correction", self.dec_df_correction.text().strip(),
+        ]
+        if self.dec_np.text().strip():
+            cmd.extend(["--np", self.dec_np.text().strip()])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # Expect JSON payload on stdout; parse and present succinctly.
+            data = json.loads(result.stdout)
+            lines = []
+            e_field = data.get("e_field_v_cm_est")
+            det = data.get("inferred_rf_detuning_mhz")
+            if e_field is not None:
+                lines.append(f"E-field ≈ {e_field:.3f} V/cm")
+            if det is not None:
+                lines.append(f"RF detuning ≈ {det:.3f} MHz")
+            if not lines:
+                lines.append("No decoder output available.")
+            self.decoder_output.setPlainText("\n".join(lines))
+        except subprocess.CalledProcessError as exc:
+            self.decoder_output.setPlainText(exc.stdout + "\n" + exc.stderr)
+            QMessageBox.warning(self, "Decoder failed", f"Decoder error:\n{exc.stderr}")
+            self.decoder_status_label.setText("Decoder: Failed")
+            self.decoder_status_label.setStyleSheet("color: red;")
+        except Exception as exc:
+            self.decoder_output.setPlainText(f"Failed to parse decoder output: {exc}")
+            QMessageBox.warning(self, "Decoder failed", f"Failed to parse decoder output:\n{exc}")
+            self.decoder_status_label.setText("Decoder: Failed")
+            self.decoder_status_label.setStyleSheet("color: red;")
+        finally:
+            self.decode_button.setEnabled(True)
+            self.decoder_status_label.setText("Decoder: Idle")
+            self.decoder_status_label.setStyleSheet("color: green;")
 
     def _save_custom_config(self) -> None:
         cfg = self._gather_config()
