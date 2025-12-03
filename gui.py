@@ -333,6 +333,10 @@ class SimulationGUI(QWidget):
                 pass
             self.backend_json_path = None
 
+    def _set_status(self, text: str, color: str) -> None:
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"color: {color};")
+
     def _load_backend_results(self) -> bool:
         path = self.backend_json_path
         if not path:
@@ -341,16 +345,20 @@ class SimulationGUI(QWidget):
         backend_path = Path(path)
         if not backend_path.exists():
             self.output.append(f"<b>Backend JSON not found:</b> {backend_path}")
+            QMessageBox.warning(self, "Backend error", f"Backend JSON not found:\n{backend_path}")
+            self._set_status("Status: Warning (no data)", "red")
             return False
         try:
             with backend_path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception as exc:
             self.output.append(f"<b>Failed to parse backend JSON:</b> {exc}")
+            QMessageBox.warning(self, "Backend error", f"Failed to parse backend JSON:\n{exc}")
             try:
                 backend_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            self._set_status("Status: Warning (parse error)", "red")
             return False
         try:
             backend_path.unlink(missing_ok=True)
@@ -445,17 +453,17 @@ class SimulationGUI(QWidget):
         code = self.process.exitCode()
         if code == 0:
             self.output.append("<b>Simulation finished successfully.</b>")
-            self.status_label.setText("Status: Finished")
-            self.status_label.setStyleSheet("color: green;")
+            self._set_status("Status: Finished", "green")
             loaded = self._load_backend_results()
             if not loaded:
                 self._update_preview()
+            else:
+                self._refresh_preview_label()
             self._update_visualization()
         else:
             self.output.append(f"<b style='color:#d00;'>Simulation failed (code {code}).</b>")
             self._cleanup_backend_file()
-            self.status_label.setText("Status: Failed (see CLI tab for more info)")
-            self.status_label.setStyleSheet("color: red;")
+            self._set_status("Status: Failed (see CLI tab for more info)", "red")
 
     # ------------------------------------------------------------------ actions
     def run_simulation(self) -> None:
@@ -463,10 +471,14 @@ class SimulationGUI(QWidget):
             QMessageBox.warning(self, "Running", "Simulation already in progress.")
             return
 
+        if not self._validate_inputs():
+            return
+
         self._cleanup_backend_file()
         self.backend_data = None
-        self.status_label.setText("Status: Running…")
-        self.status_label.setStyleSheet("color: orange;")
+        self._set_status("Status: Running…", "orange")
+        self.preview_label.setText("Running simulation…")
+        self.preview_label.setStyleSheet("color: orange;")
         python_exec = sys.executable
         cmd = [
             python_exec,
@@ -588,6 +600,27 @@ class SimulationGUI(QWidget):
     def _toggle_sweep_field(self, checked: bool) -> None:
         self.sweep_output.setEnabled(checked)
         self.sweep_points.setEnabled(checked)
+
+    def _validate_inputs(self) -> bool:
+        # Required numeric: rf_frequency
+        try:
+            float(self.rf_frequency.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "Input error", "RF frequency must be a number.")
+            self._set_status("Status: Invalid input", "red")
+            return False
+        amps = [a for a in self.rf_amplitudes.text().split() if a.strip()]
+        if not amps:
+            QMessageBox.warning(self, "Input error", "Please provide at least one RF amplitude.")
+            self._set_status("Status: Invalid input", "red")
+            return False
+        try:
+            [float(a) for a in amps]
+        except ValueError:
+            QMessageBox.warning(self, "Input error", "RF amplitudes must be numeric.")
+            self._set_status("Status: Invalid input", "red")
+            return False
+        return True
 
     def _set_preview_paths(self, paths: list[str]) -> None:
         self.generated_plots = paths
