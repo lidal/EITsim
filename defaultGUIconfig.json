@@ -31,5 +31,6 @@
   "fit_profile": "gaussian",
   "extra_args": "",
   "debug_timing": false,
-  "verbose": false
+  "verbose": false,
+  "show_levels": false
 }

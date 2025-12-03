@@ -126,6 +126,8 @@ class SimulationGUI(QWidget):
         self.debug_timing.setChecked(bool(self.defaults.get("debug_timing", False)))
         self.debug_verbose = QCheckBox("Verbose (decoder/backend)")
         self.debug_verbose.setChecked(bool(self.defaults.get("verbose", False)))
+        self.show_levels = QCheckBox("Show level diagram")
+        self.show_levels.setChecked(bool(self.defaults.get("show_levels", False)))
 
         # Decoder inputs
         self.dec_n = QLineEdit("50")
@@ -230,6 +232,7 @@ class SimulationGUI(QWidget):
         plot_toggles.addWidget(self.normalize)
         plot_toggles.addWidget(self.no_show)
         plot_toggles.addWidget(self.fit_peaks)
+        plot_toggles.addWidget(self.show_levels)
         plot_layout.addLayout(plot_toggles)
         profile_layout = QHBoxLayout()
         profile_layout.addWidget(QLabel("Fit profile"))
@@ -316,6 +319,12 @@ class SimulationGUI(QWidget):
         self.visual_canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
                                          QSizePolicy.Policy.Expanding)
         self.visual_canvas.installEventFilter(self)
+        self.level_fig = Figure(figsize=(3, 2))
+        self.level_ax = self.level_fig.add_subplot(111)
+        self.level_canvas = FigureCanvas(self.level_fig)
+        self.level_canvas.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                        QSizePolicy.Policy.Fixed)
+        self.level_canvas.setFixedHeight(180)
         self.rotation_angle = 0.0
         self.rotation_speed = 1.0
         self.visual_timer = QTimer(self)
@@ -328,21 +337,27 @@ class SimulationGUI(QWidget):
         self.backend_json_path: str | None = None
         self.backend_data = None
 
-        log_layout = QVBoxLayout()
-        log_row = QHBoxLayout()
-        log_row.setSpacing(10)
-        log_row.addWidget(self.summary_box)
-        visual_column = QVBoxLayout()
-        visual_column.addWidget(self.visual_canvas)
+        # Right column layout: summary + level diagram (left), visualization (right), preview spanning both
+        right_top = QHBoxLayout()
+        right_top.setSpacing(10)
+        summary_col = QVBoxLayout()
+        summary_col.addWidget(self.summary_box)
+        summary_col.addWidget(self.level_canvas)
+        right_top.addLayout(summary_col)
+        visual_col = QVBoxLayout()
+        visual_col.addWidget(self.visual_canvas)
         button_row = QHBoxLayout()
         button_row.addWidget(self.auto_rotate)
         button_row.addWidget(self.reset_view_btn)
-        visual_column.addLayout(button_row)
-        log_row.addLayout(visual_column, 1)
-        log_layout.addLayout(log_row)
-        preview_container = QVBoxLayout()
-        preview_container.addWidget(self.preview_label)
-        log_layout.addLayout(preview_container)
+        visual_col.addLayout(button_row)
+        right_top.addLayout(visual_col, 1)
+
+        self.preview_container = QVBoxLayout()
+        self.preview_container.addWidget(self.preview_label)
+
+        right_layout = QVBoxLayout()
+        right_layout.addLayout(right_top)
+        right_layout.addLayout(self.preview_container)
 
         self.preview_buttons_layout = QHBoxLayout()
         self.preview_buttons_layout.addWidget(self.save_plot_btn)
@@ -351,7 +366,7 @@ class SimulationGUI(QWidget):
 
         content_row = QHBoxLayout()
         content_row.addWidget(self.tabs, 1)
-        content_row.addLayout(log_layout, 1)
+        content_row.addLayout(right_layout, 1)
 
         bottom_row = QHBoxLayout()
         bottom_row.addWidget(self.save_config_btn)
@@ -370,8 +385,12 @@ class SimulationGUI(QWidget):
         for widget in [self.cell_length, self.cell_cross,
                        self.probe_waist, self.control_waist]:
             widget.editingFinished.connect(self._update_visualization)
+        self.show_levels.stateChanged.connect(self._update_visualization)
+        self.show_levels.stateChanged.connect(lambda state: self.level_canvas.setVisible(bool(state)))
         self._set_preview_paths([])
         self.cli_help_box.setText(self._load_cli_help())
+        self._draw_level_diagram(None)
+        self.level_canvas.setVisible(self.show_levels.isChecked())
 
     def _make_rows(self, rows):
         layout = QVBoxLayout()
@@ -453,6 +472,7 @@ class SimulationGUI(QWidget):
             self.output.append("<b>Backend logs:</b>")
             for line in logs:
                 self.output.append(str(line))
+        self._draw_level_diagram(data)
 
     def _update_summary_fields(self, data: dict) -> None:
         entries = {
@@ -798,6 +818,60 @@ class SimulationGUI(QWidget):
             self.preview_index += 1
             self._refresh_preview_label()
 
+    def _rebuild_preview_container(self) -> None:
+        if not hasattr(self, "preview_container"):
+            return
+        while self.preview_container.count():
+            item = self.preview_container.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+        self.preview_container.addWidget(self.preview_label)
+
+    def _draw_level_diagram(self, data: dict | None) -> None:
+        ax = self.level_ax
+        ax.clear()
+        ax.set_axis_off()
+        ax.set_ylim(-0.5, 3.0)
+        ax.set_xlim(-0.5, 2.5)
+
+        # Energies (arbitrary units; order: 5S < 5P < nP < nD)
+        y_g, y_e, y_rp, y_r = 0.0, 1.0, 2.0, 2.3
+        ax.hlines([y_g, y_e, y_r, y_rp], 0, 1, colors=["gray", "gray", "#5a1f1f", "#2c3f7a"], linewidth=2)
+        n_val = data.get("selected_n") if data else None
+        np_val = data.get("selected_np") if data else None
+        n_label = f"{n_val}D5/2" if n_val else "nD5/2"
+        np_label = f"{np_val}P3/2" if np_val else "(n+1)P3/2"
+        ax.text(-0.05, y_g, "5S1/2", va="center", ha="right")
+        ax.text(-0.05, y_e, "5P3/2", va="center", ha="right")
+        ax.text(-0.05, y_r, n_label, va="center", ha="right")
+        ax.text(-0.05, y_rp, np_label, va="center", ha="right")
+
+        if data:
+            probe_lbl = data.get("probe_lambda_nm")
+            control_lbl = data.get("control_lambda_nm")
+            rf_det = data.get("rf_detuning_mhz")
+            ax.annotate("", xy=(0.5, y_e), xytext=(0.5, y_g),
+                        arrowprops=dict(arrowstyle="->", color="red"))
+            ax.text(0.55, (y_e + y_g) / 2, f"λp ~ {probe_lbl:.1f} nm" if probe_lbl else "λp",
+                    va="center", ha="left")
+            ax.annotate("", xy=(0.3, y_r), xytext=(0.3, y_e),
+                        arrowprops=dict(arrowstyle="->", color="blue"))
+            ax.text(0.35, (y_r + y_e) / 2, f"λc ~ {control_lbl:.1f} nm" if control_lbl else "λc",
+                    va="center", ha="left")
+            ax.annotate("", xy=(0.8, y_rp), xytext=(0.8, y_r),
+                        arrowprops=dict(arrowstyle="->", color="orange"))
+            rf_res_hz = data.get("rf_res_hz") if data else None
+            label_rf = None
+            if rf_res_hz:
+                label_rf = f"RF ≈ {rf_res_hz/1e9:.3f} GHz"
+            elif rf_det is not None:
+                label_rf = f"ΔRF = {rf_det:+.2f} MHz"
+            if label_rf:
+                ax.text(0.9, (y_r + y_rp) / 2, label_rf,
+                        va="center", ha="left")
+        self.level_canvas.draw_idle()
+
     def _save_current_plot(self) -> None:
         if not self.generated_plots:
             QMessageBox.information(self, "Save plot", "No plot available to save.")
@@ -868,7 +942,8 @@ class SimulationGUI(QWidget):
             self.decoder_status_label.setStyleSheet("color: green;")
 
     def _save_custom_config(self) -> None:
-        cfg = self._gather_config()
+        cfg = self.base_defaults.copy()
+        cfg.update(self._gather_config())
         path = REPO_ROOT / "customGUIconfig.json"
         try:
             with path.open("w", encoding="utf-8") as fh:
