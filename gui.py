@@ -7,6 +7,7 @@ import json
 import tempfile
 from pathlib import Path
 from collections import OrderedDict
+import shutil
 
 
 import matplotlib
@@ -33,6 +34,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QGroupBox,
+    QFileDialog,
     QTabWidget,
     QWidget,
 )
@@ -269,8 +271,10 @@ class SimulationGUI(QWidget):
         self.preview_index = 0
         self.prev_plot_btn = QPushButton("◀ Back")
         self.next_plot_btn = QPushButton("Next ▶")
+        self.save_plot_btn = QPushButton("Save plot as")
         self.prev_plot_btn.clicked.connect(self._show_previous_plot)
         self.next_plot_btn.clicked.connect(self._show_next_plot)
+        self.save_plot_btn.clicked.connect(self._save_current_plot)
         self.prev_plot_btn.setEnabled(False)
         self.next_plot_btn.setEnabled(False)
 
@@ -310,6 +314,7 @@ class SimulationGUI(QWidget):
         log_layout.addLayout(preview_container)
 
         self.preview_buttons_layout = QHBoxLayout()
+        self.preview_buttons_layout.addWidget(self.save_plot_btn)
         self.preview_buttons_layout.addWidget(self.prev_plot_btn)
         self.preview_buttons_layout.addWidget(self.next_plot_btn)
 
@@ -750,6 +755,28 @@ class SimulationGUI(QWidget):
         if self.preview_index + 1 < len(self.generated_plots):
             self.preview_index += 1
             self._refresh_preview_label()
+
+    def _save_current_plot(self) -> None:
+        if not self.generated_plots:
+            QMessageBox.information(self, "Save plot", "No plot available to save.")
+            return
+        src = Path(self.generated_plots[self.preview_index])
+        if not src.exists():
+            QMessageBox.warning(self, "Save plot", f"Source plot not found:\n{src}")
+            return
+        dest_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save plot as",
+            str(src.name),
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All Files (*)",
+        )
+        if not dest_path:
+            return
+        try:
+            shutil.copy(src, dest_path)
+            QMessageBox.information(self, "Save plot", f"Saved plot to:\n{dest_path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Save plot", f"Failed to save plot:\n{exc}")
 
     def _save_custom_config(self) -> None:
         cfg = self._gather_config()
